@@ -2,6 +2,8 @@
 
 Your RGB lighting follows what you're doing — automatically.
 
+> **Built on SteelSeries GG (Sonar).** Sonar's separate Game / Chat / Media / Aux audio channels are how this tells music, videos and games apart. GG and Sonar are free and work **without any SteelSeries hardware**. Also needs the free SignalRGB (no Pro subscription) and Python.
+
 | When you… | The lights… |
 |---|---|
 | play music (Spotify, AIMP, …) | run the audio‑reactive **Album Pump Up Beats** effect in the **colours of the album cover**, changing with every song |
