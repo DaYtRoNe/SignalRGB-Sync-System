@@ -1,0 +1,12 @@
+# runtime / user data
+AlbumSpectrumBridge/controller.log
+AlbumSpectrumBridge/bridge.log
+AlbumSpectrumBridge/apps.json
+AlbumSpectrumBridge/restart.request
+AlbumSpectrumBridge/current_cover.png
+# third-party helper, not redistributed here (see README > Optional: AIMP users)
+AlbumSpectrumBridge/AIMPSmtc/
+# python
+__pycache__/
+*.pyc
+*.bak

@@ -1,0 +1,25 @@
+<head>
+	<!-- Version 1.0 -->
+	<title>Lights Off</title>
+	<meta description="All lights off (or a faint single colour). Used by the Album Sync controller while the monitor is off.">
+	<meta publisher="Eshan">
+	<meta property="glow" label="Glow colour (black = fully off)" type="color" default="#000000" min="0" max="360"/>
+</head>
+
+<body style="margin: 0; padding: 0;">
+	<canvas id="exCanvas" width="320" height="200"></canvas>
+</body>
+
+<script>
+const c = document.getElementById("exCanvas");
+const ctx = c.getContext("2d");
+
+function update()
+{
+	ctx.fillStyle = glow;
+	ctx.fillRect(0, 0, 320, 200);
+	window.requestAnimationFrame(update);
+}
+
+window.requestAnimationFrame(update);
+</script>

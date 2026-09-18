@@ -1,0 +1,20 @@
+{
+    "AWAY": [
+        "Lights Off"
+    ],
+    "IDLE": [
+        "Multizone"
+    ],
+    "GAMING": [
+        "Screen Ambience"
+    ],
+    "MOVIE": [
+        "Screen Ambience"
+    ],
+    "BROWSER": [
+        "Album Pump Up Beats"
+    ],
+    "MUSIC": [
+        "Album Pump Up Beats"
+    ]
+}
