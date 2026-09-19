@@ -37,7 +37,7 @@ if ($LASTEXITCODE -ne 0) { Fail "Packages did not load correctly. Run Install.ba
 Write-Host "    Packages OK"
 
 # ---------------------------------------------------------------- 3. Effect files
-Step 3 "Putting the effects (Album Pump Up Beats, Lights Off) where SignalRGB looks for them..."
+Step 3 "Putting the effects (Album Pump Up Beats, Lights Off, Screen Dominant) where SignalRGB looks for them..."
 $effectsDir = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WhirlwindFX\Effects"
 New-Item -ItemType Directory -Force -Path $effectsDir | Out-Null
 Get-ChildItem (Join-Path $Root "effect") -Filter *.html | Copy-Item -Destination $effectsDir -Force

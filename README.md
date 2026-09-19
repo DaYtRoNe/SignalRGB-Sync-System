@@ -9,7 +9,7 @@ Your RGB lighting follows what you're doing — automatically.
 | play music (Spotify, AIMP, …) | run the audio‑reactive **Album Pump Up Beats** effect in the **colours of the album cover**, changing with every song |
 | play something in a browser (YouTube, …) | run the same audio‑reactive effect in the **colours of your screen** |
 | watch a film in a video player (VLC, Media Player, …) | mirror the screen (**Screen Ambience**) |
-| play a game | mirror the screen (**Screen Ambience**) — from the moment the game opens |
+| play a game | mirror the screen (**Screen Ambience**) — from the moment the game opens. Or use **Screen Dominant** (included): every LED takes the one standout colour of the screen — the whole setup goes red on an Among Us *Impostor* reveal |
 | do nothing / pause | show your **idle pattern** (any SignalRGB effect; can rotate between several) |
 | walk away and Windows switches the monitor off | **turn off** — and come back the moment you touch the mouse or keyboard |
 
@@ -166,6 +166,11 @@ Good to know:
 
 Everything below is either a tray‑menu action or a text file edited with **Notepad** (right‑click → *Open with* → *Notepad*, save with Ctrl+S).
 
+### The included effects
+- **Album Pump Up Beats** — audio‑reactive bars that take their colours from the album cover (music) or the screen (browser).
+- **Screen Dominant** — every LED shows the single standout colour of the screen (built on SignalRGB's own screen analysis, so it costs nothing extra). Great for games: an Impostor reveal turns the whole room red. Settings: saturation boost, brightness, smoothing, what to do on a black screen. Pick it for *Game* / *Film* via the tray's *Effects for…* menu if you prefer it to Screen Ambience's per‑zone mirror.
+- **Lights Off** — everything off (or a faint glow colour of your choice).
+
 ### Which effect for which situation
 Use the tray's **Effects for…** menu. The same information lives in `C:\AlbumSpectrumBridge\effects.json`, which you can also edit by hand — changes apply immediately, no restart:
 
@@ -291,7 +296,7 @@ Restart the helper any time: tray → **Restart controller**, or `Install.bat`, 
 | `rgb_controller.py` | The helper: watches Sonar, switches effects, sends colours, tray icon, lights‑off, AimpSmtc. Settings at the top |
 | `audio_mixer.py` | Combines the Media + Aux channels into the virtual cable SignalRGB listens to |
 | `album_bridge.py` | Reads album covers and picks their colours |
-| `effect\Album Pump Up Beats.html`, `effect\Lights Off.html` | The two SignalRGB effects (Install.bat copies them to Documents) |
+| `effect\Album Pump Up Beats.html`, `effect\Lights Off.html`, `effect\Screen Dominant.html` | The SignalRGB effects (Install.bat copies them to Documents) |
 | `requirements.txt`, `scripts\` | Used by the installer |
 | `tests\` | Unit tests for the decision logic (`py tests\test_detector.py`) |
 | `controller.log` | Appears after the first run. Safe to delete; recreated at each start |

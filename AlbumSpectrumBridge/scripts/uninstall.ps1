@@ -11,9 +11,9 @@ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "rgb_contro
 Get-Process AimpSmtc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 $effectsDir = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WhirlwindFX\Effects"
-$effects = @("Album Pump Up Beats.html", "Lights Off.html") | ForEach-Object { Join-Path $effectsDir $_ } | Where-Object { Test-Path $_ }
+$effects = @("Album Pump Up Beats.html", "Lights Off.html", "Screen Dominant.html") | ForEach-Object { Join-Path $effectsDir $_ } | Where-Object { Test-Path $_ }
 if ($effects) {
-    $answer = Read-Host "Also remove the 'Album Pump Up Beats' and 'Lights Off' effects from SignalRGB? (y/n)"
+    $answer = Read-Host "Also remove the Album Pump Up Beats, Lights Off and Screen Dominant effects from SignalRGB? (y/n)"
     if ($answer -match "^[yY]") { $effects | Remove-Item -Force; Write-Host "Effects removed." }
 }
 
