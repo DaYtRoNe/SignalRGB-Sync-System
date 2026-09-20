@@ -1240,7 +1240,7 @@ def dominant_colour(image, min_sat=DOMINANT_MIN_SAT):
     ok = (light >= 8) & (light <= 96) & (sat >= min_sat)
 
     if not ok.any():
-        return None, None, None, lit
+        return None, None, None, lit, None
 
     w = (sat[ok] / 100) * (1 - np.abs(light[ok] - 50) / 50 * 0.6)
     h = hue[ok]
@@ -1251,14 +1251,31 @@ def dominant_colour(image, min_sat=DOMINANT_MIN_SAT):
     best = int(score.argmax())
 
     if score[best] < 0.5 * (len(px) / 560):          # less than half a cell's worth (scaled to grid size)
-        return None, None, None, lit
+        return None, None, None, lit, None
 
-    sel = np.isin(b_idx, [best, (best + 1) % bins, (best - 1) % bins])
-    rad = np.deg2rad(h[sel])
-    hue_out = float(np.degrees(np.arctan2((np.sin(rad) * w[sel]).sum(), (np.cos(rad) * w[sel]).sum()))) % 360
-    sat_out = float((sat[ok][sel] * w[sel]).sum() / w[sel].sum())
-    light_out = float((light[ok][sel] * w[sel]).sum() / w[sel].sum())
-    return hue_out, sat_out, light_out, lit
+    def colour_of(centre):
+        sel = np.isin(b_idx, [centre, (centre + 1) % bins, (centre - 1) % bins])
+        rad = np.deg2rad(h[sel])
+        hue_c = float(np.degrees(np.arctan2((np.sin(rad) * w[sel]).sum(), (np.cos(rad) * w[sel]).sum()))) % 360
+        sat_c = float((sat[ok][sel] * w[sel]).sum() / w[sel].sum())
+        light_c = float((light[ok][sel] * w[sel]).sum() / w[sel].sum())
+        return hue_c, sat_c, light_c
+
+    hue_out, sat_out, light_out = colour_of(best)
+
+    # runner-up: the best bin at least 60 degrees away, if it carries a third of the winner's weight
+    second = None
+    masked = score.copy()
+
+    for d in range(-5, 6):
+        masked[(best + d) % bins] = 0
+
+    runner = int(masked.argmax())
+
+    if masked[runner] >= 0.33 * score[best]:
+        second = colour_of(runner)
+
+    return hue_out, sat_out, light_out, lit, second
 
 
 class ScreenDominant:
@@ -1334,12 +1351,17 @@ class ScreenDominant:
         # sample every ~12th pixel straight from the raw frame (no full-frame conversion): ~14k pixels
         step = max(1, min(frame.shape[1] // 160, frame.shape[0] // 90))
         sample = frame[::step, ::step, :3][:, :, ::-1]           # BGRA -> RGB
-        hue, sat, light, lit = dominant_colour(sample)
+        hue, sat, light, lit, second = dominant_colour(sample)
 
         if hue is None:
             event = f"dominant|none|{lit:.2f}"
         else:
             event = f"dominant|{hue:.0f}|{sat:.0f}|{light:.0f}|{lit:.2f}"
+
+            if second is not None:
+                event += f"|{second[0]:.0f}|{second[1]:.0f}|{second[2]:.0f}"
+
+        self._log_change(hue, sat, now)
 
         # send on change, and at least every second so a freshly loaded effect gets it quickly
         if event != self.last_event or now - self.last_sent > 1.0:
@@ -1351,6 +1373,27 @@ class ScreenDominant:
             self.last_event, self.last_sent = event, now
         except Exception:
             pass
+
+    NAMES = [(15, "RED"), (45, "ORANGE"), (70, "YELLOW"), (165, "GREEN"), (200, "CYAN"), (260, "BLUE"),
+             (300, "PURPLE"), (345, "MAGENTA"), (361, "RED")]
+
+    def _log_change(self, hue, sat, now):
+        """One log line when the standout colour changes noticeably (at most once a second)."""
+        prev = getattr(self, "_logged_hue", None)
+
+        if hue is None:
+            if prev is not None:
+                self.log("Screen : no dominant colour (dark / grey screen)")
+                self._logged_hue = None
+
+            return
+
+        moved = prev is None or min(abs(hue - prev), 360 - abs(hue - prev)) > 40
+
+        if moved and now - getattr(self, "_logged_at", 0) > 1.0:
+            name = next(n for limit, n in self.NAMES if hue < limit)
+            self.log(f"Screen : dominant now {name} ({hue:.0f} deg, sat {sat:.0f})")
+            self._logged_hue, self._logged_at = hue, now
 
 
 class AlbumPalette:

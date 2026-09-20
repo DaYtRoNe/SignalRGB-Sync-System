@@ -171,7 +171,7 @@ Everything below is either a tray‑menu action or a text file edited with **Not
 
 ### The included effects
 - **Album Pump Up Beats** — audio‑reactive bars that take their colours from the album cover (music) or the screen (browser).
-- **Sync Screen Dominant** — every LED shows the single standout colour of the screen. Great for games: an Among Us *Impostor* reveal turns the whole room red. The helper measures the colour (GPU capture, only when the screen changes — negligible cost) and sends it to the effect. Settings: saturation boost, brightness, smoothing, what to do on a black screen. Pick it for *Game* / *Film* via the tray's *Effects for…* menu if you prefer it to Screen Ambience's per‑zone mirror.
+- **Sync Screen Dominant** — every LED shows the single standout colour of the screen. Great for games: an Among Us *Impostor* reveal turns the whole room red. The helper measures the colour (GPU capture, only when the screen changes — negligible cost) and sends it to the effect. Settings: saturation boost, brightness, smoothing, what to do on a black screen, *Style* (single colour / left‑right split / gradient using the screen's second colour) and *Punch* (three quick flashes when the screen jumps to a new strong colour — the Impostor moment). Pick it for *Game* / *Film* via the tray's *Effects for…* menu if you prefer it to Screen Ambience's per‑zone mirror.
 - **Sync Lights Off** — everything off (or a faint glow colour of your choice).
 
 Why the "Sync" prefix? SignalRGB looks effects up on its marketplace by name; a name that also exists there as a paid effect makes SignalRGB lock yours. Unique names avoid that.

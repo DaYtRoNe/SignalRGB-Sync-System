@@ -1,5 +1,5 @@
 <head>
-	<!-- Version 2.0 -->
+	<!-- Version 2.1 -->
 	<title>Sync Screen Dominant</title>
 	<meta description="Fills every LED with the single standout colour of your screen - the whole setup turns red on an Impostor reveal, gold in a sunset, blue in the ocean. The colour is measured by the SignalRGB Sync System controller (rgb_controller.py) and sent to this effect, so it needs the controller running.">
 	<meta publisher="Eshan">
@@ -9,6 +9,8 @@
 	<meta property="smoothing" label="Smoothing" type="number" min="0" max="100" default="60" tooltip="0 = react instantly, 100 = drift very slowly between colours"/>
 	<meta property="followBrightness" label="Follow screen brightness" type="boolean" default="1" tooltip="dim screen = dim lights; off = always full colour"/>
 	<meta property="darkScreen" label="When the screen is (almost) black" type="combobox" values="Dim,Keep last colour,Off" default="Dim"/>
+	<meta property="style" label="Style" type="combobox" values="Single colour,Left/right split,Gradient" default="Single colour" tooltip="split/gradient use the screen's second colour when there is one"/>
+	<meta property="punch" label="Punch on a sudden colour change" type="boolean" default="1" tooltip="three quick flashes when the screen jumps to a new strong colour (Impostor!)"/>
 </head>
 
 <body style="margin: 0; padding: 0;">
@@ -20,12 +22,16 @@ const canvas = document.getElementById("exCanvas");
 const ctx = canvas.getContext("2d");
 const WIDTH = 320, HEIGHT = 200;
 
-// last message from the controller: dominant|<hue 0-360>|<sat 0-100>|<light 0-100>|<lit fraction 0-1>
+// last message from the controller: dominant|<hue 0-360>|<sat 0-100>|<light 0-100>|<lit fraction 0-1>[|h2|s2|l2]
 //                                or dominant|none|<lit fraction 0-1>   (nothing colourful on screen)
 let target = null;              // {hue, sat, light} or null
+let second = null;              // runner-up colour {hue, sat, light} or null
 let litFraction = 0;
 let lastMessageAt = 0;
 let curHue = null, curSat = 0, curLight = 0;
+let cur2Hue = null, cur2Sat = 0, cur2Light = 0;
+let punchUntil = 0;             // performance.now() until which the punch flashes run
+const PUNCH_MS = 600, PUNCH_HZ = 5;
 
 function onCanvasApiEvent(apiEvent)
 {
@@ -43,6 +49,7 @@ function onCanvasApiEvent(apiEvent)
 	if(parts[1] === "none")
 	{
 		target = null;
+		second = null;
 		litFraction = parseFloat(parts[2]) || 0;
 		return;
 	}
@@ -52,8 +59,25 @@ function onCanvasApiEvent(apiEvent)
 	if([hue, sat, light].some(v => Number.isNaN(v)))
 	{return;}
 
+	// a sudden jump to a strong colour (dark/other colour -> saturated red) = punch
+	const jumped = target === null ? curLight < 20 : hueDist(target.hue, hue) > 60;
+
+	if(punch && jumped && sat > 60 && performance.now() > punchUntil)
+	{
+		punchUntil = performance.now() + PUNCH_MS;
+		curHue = hue;                              // flash in the new colour straight away
+		curSat = Math.min(100, sat + satBoost);
+	}
+
 	target = {hue: hue, sat: sat, light: light};
 	litFraction = parseFloat(parts[4]) || 1;
+	second = parts.length >= 8 ? {hue: parseFloat(parts[5]), sat: parseFloat(parts[6]), light: parseFloat(parts[7])} : null;
+}
+
+function hueDist(a, b)
+{
+	const d = Math.abs(a - b) % 360;
+	return d > 180 ? 360 - d : d;
 }
 
 function lerpHue(a, b, t)
@@ -94,9 +118,50 @@ function update()
 		curLight += (targetLight - curLight) * alpha;
 	}
 
-	const l = curLight * brightness / 100;
-	ctx.fillStyle = curHue === null ? "#000000" : `hsl(${curHue.toFixed(1)}, ${curSat.toFixed(1)}%, ${l.toFixed(1)}%)`;
-	ctx.fillRect(0, 0, WIDTH, HEIGHT);
+	// second colour eases the same way; falls back to the main colour when there is none
+	const want2 = (pick !== null && second !== null && style !== "Single colour") ? second : null;
+
+	if(want2 !== null)
+	{
+		cur2Hue = cur2Hue === null ? want2.hue : lerpHue(cur2Hue, want2.hue, alpha);
+		cur2Sat += (Math.min(100, want2.sat + satBoost) - cur2Sat) * alpha;
+		cur2Light += ((followBrightness ? Math.max(22, Math.min(55, want2.light)) : 50) - cur2Light) * alpha;
+	}
+
+	let l = curLight * brightness / 100;
+	let l2 = (want2 !== null ? cur2Light : curLight) * brightness / 100;
+
+	// punch: three hard flashes of the new colour, then normal easing continues
+	if(performance.now() < punchUntil)
+	{
+		const on = Math.sin((punchUntil - performance.now()) / 1000 * Math.PI * 2 * PUNCH_HZ) > 0;
+		l = on ? 55 * brightness / 100 : 4;
+		l2 = l;
+	}
+
+	const c1 = curHue === null ? "#000000" : `hsl(${curHue.toFixed(1)}, ${curSat.toFixed(1)}%, ${l.toFixed(1)}%)`;
+	const c2 = (want2 !== null && cur2Hue !== null) ? `hsl(${cur2Hue.toFixed(1)}, ${cur2Sat.toFixed(1)}%, ${l2.toFixed(1)}%)` : c1;
+
+	if(want2 === null || style === "Single colour")
+	{
+		ctx.fillStyle = c1;
+		ctx.fillRect(0, 0, WIDTH, HEIGHT);
+	}
+	else if(style === "Left/right split")
+	{
+		ctx.fillStyle = c1;
+		ctx.fillRect(0, 0, WIDTH / 2, HEIGHT);
+		ctx.fillStyle = c2;
+		ctx.fillRect(WIDTH / 2, 0, WIDTH / 2, HEIGHT);
+	}
+	else
+	{
+		const grad = ctx.createLinearGradient(0, 0, WIDTH, 0);
+		grad.addColorStop(0, c1);
+		grad.addColorStop(1, c2);
+		ctx.fillStyle = grad;
+		ctx.fillRect(0, 0, WIDTH, HEIGHT);
+	}
 
 	window.requestAnimationFrame(update);
 }
