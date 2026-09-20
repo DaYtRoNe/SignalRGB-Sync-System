@@ -9,7 +9,7 @@ you are doing, then:
   BROWSER  audio on Sonar-Media from a browser       -> Album Pump Up Beats + screen colours
   MUSIC    audio on Sonar-Aux                        -> Album Pump Up Beats + album-art colours
   IDLE     nothing playing                           -> IDLE_EFFECT
-  AWAY     monitor switched off by Windows           -> "Lights Off" effect (any input restores)
+  AWAY     monitor switched off by Windows           -> "Sync Lights Off" effect (any input restores)
 
 Effects are switched with SignalRGB's URL scheme (signalrgb://effect/apply/...),
 only when the target effect actually changes. Colours are sent with the same
@@ -41,6 +41,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
+import numpy as np
 import psutil
 from PIL import Image
 from comtypes import CLSCTX_ALL, COINIT_MULTITHREADED, CoInitializeEx
@@ -68,7 +69,7 @@ import audio_mixer  # noqa: E402
 # one is picked each time that mode starts.
 EFFECTS_FILE = Path(__file__).parent / "effects.json"
 DEFAULT_EFFECTS = {
-    "AWAY": ["Lights Off"],               # monitor off: all lights off (custom effect in Documents\WhirlwindFX\Effects)
+    "AWAY": ["Sync Lights Off"],               # monitor off: all lights off (custom effect in Documents\WhirlwindFX\Effects)
     "IDLE": ["Multizone"],
     "GAMING": ["Screen Ambience"],
     "MOVIE": ["Screen Ambience"],
@@ -154,6 +155,12 @@ PAUSE_EXIT_SECONDS = {"MUSIC": 1.5, "BROWSER": 4.0, "MOVIE": 4.0}
 POLL_SECONDS = 0.25        # how often the meters are read
 
 SCREEN_INTERVAL = 0.5      # seconds between screen colour updates in BROWSER mode
+
+# "Sync Screen Dominant" effect: the controller measures the screen's standout
+# colour and sends it (SignalRGB gates screen access for third-party effects).
+DOMINANT_EFFECT = "Sync Screen Dominant"
+DOMINANT_INTERVAL = 0.25   # seconds between measurements while that effect is showing
+DOMINANT_MIN_SAT = 20      # colours less saturated than this (0-100) are not candidates
 SCREEN_MIN_BRIGHTNESS = 6  # mean pixel value below this = black (DRM video), keep last palette
 ALBUM_RESEND_SECONDS = 15.0
 # Right after an effect switch SignalRGB is still loading the effect and drops
@@ -241,6 +248,117 @@ def apply_effect(name):
     os.startfile(f"signalrgb://effect/apply/{quote(name)}?_silent=true")
 
 
+# Our effects live in SignalRGB's own program folder (like its built-in ones):
+# the free tier loads at most 10 custom effects from Documents/WhirlwindFX/Effects,
+# so effects placed there silently vanish once you have more. A SignalRGB
+# update replaces the program folder, so the controller re-copies them
+# whenever a new app-x.y.z folder appears (SignalRGB then needs one restart).
+EFFECT_SOURCE_DIR = Path(__file__).parent / "effect"
+SIGNALRGB_APP_ROOT = Path(os.environ.get("LOCALAPPDATA", "")) / "VortxEngine"
+
+
+def signalrgb_effects_dir():
+    """The Effects/Dynamic folder of the newest installed SignalRGB version, or None."""
+    candidates = sorted(SIGNALRGB_APP_ROOT.glob("app-*/Signal-x64/Effects/Dynamic"),
+                        key=lambda d: [int(x) if x.isdigit() else 0 for x in d.parts[-4][4:].split(".")])
+    return candidates[-1] if candidates else None
+
+
+def ensure_effects_installed(log=print):
+    """Copy our effect files into SignalRGB's program folder if missing or older. Returns names copied."""
+    target = signalrgb_effects_dir()
+
+    if target is None or not EFFECT_SOURCE_DIR.exists():
+        return []
+
+    copied = []
+
+    for src in EFFECT_SOURCE_DIR.glob("*.html"):
+        dst = target / src.name
+
+        try:
+            data = src.read_bytes()
+
+            if not dst.exists() or dst.read_bytes() != data:
+                dst.write_bytes(data)
+                copied.append(src.stem)
+        except OSError as e:
+            log(f"Effects: could not copy {src.name} to SignalRGB ({e})")
+
+    if copied:
+        log(f"Effects: installed into SignalRGB ({target.parts[-4]}): {', '.join(copied)} - restart SignalRGB once to load them")
+
+    return copied
+
+
+SIGNALRGB_LOG_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "WhirlwindFX" / "SignalRgb" / "Logs"
+
+
+def signalrgb_main_log():
+    """The log file of the running SignalRGB main process. Every signalrgb:// URL briefly
+    starts a second SignalRgb.exe that writes its own tiny log, so "newest file" is wrong;
+    each log's first line carries the writer's PID, so match it against live processes."""
+    pids = set()
+
+    for proc in psutil.process_iter(["name", "create_time"]):
+        try:
+            if (proc.info["name"] or "").lower() == "signalrgb.exe" and time.time() - proc.info["create_time"] > 5:
+                pids.add(proc.pid)
+        except Exception:
+            pass
+
+    logs = sorted((f for f in SIGNALRGB_LOG_DIR.glob("SignalRGB_*.log") if ".old." not in f.name),
+                  key=lambda f: f.stat().st_mtime, reverse=True)
+
+    for f in logs[:12]:
+        try:
+            with open(f, "rb") as fh:
+                head = fh.read(200).replace(bytes([0]), b"").decode("utf-8", errors="ignore")
+
+            m = re.search(r"\[(\d+)-", head)
+
+            if m and int(m.group(1)) in pids:
+                return f
+        except OSError:
+            continue
+
+    big = [f for f in logs if f.stat().st_size > 5000]
+    return big[0] if big else (logs[0] if logs else None)
+
+
+def signalrgb_activated(name, since):
+    """True if SignalRGB's own log shows "Activated '<name>'" at or after `since` (epoch seconds);
+    False if the log is readable and shows no such line; None if the log cannot be read."""
+    try:
+        newest = signalrgb_main_log()
+
+        if newest is None:
+            return None
+
+        with open(newest, "rb") as f:
+            f.seek(max(0, newest.stat().st_size - 400_000))
+            text = f.read().replace(bytes([0]), b"").decode("utf-8", errors="ignore")
+
+        needle = f"Activated '{name}'"
+        last_activated = None                    # the effect SignalRGB most recently activated
+
+        for line in text.splitlines():
+            if "EffectRunning: Activated '" in line:
+                last_activated = line.split("Activated '", 1)[1].rstrip("'")
+
+            if needle in line:
+                try:                                              # 09/19/26 16:37:18.168 [...
+                    stamp = time.mktime(time.strptime(line[:17], "%m/%d/%y %H:%M:%S"))
+                except ValueError:
+                    continue
+
+                if stamp >= since - 2:
+                    return True
+
+        # asking for the effect that is already showing produces no new "Activated" line
+        return last_activated == name
+    except Exception:
+        return None
 class EffectTable:
     """mode -> list of effect names, hot-reloaded from effects.json."""
 
@@ -1064,6 +1182,177 @@ class ScreenPalette:
         return extract_dominant_colors(image, 3)
 
 
+def send_event(event):
+    """POST any canvas event to SignalRGB (same channel album_bridge.send_palette uses)."""
+    import urllib.request
+    from urllib.parse import urlencode
+    from album_bridge import SIGNALRGB_URL, SENDER
+
+    url = f"{SIGNALRGB_URL}?{urlencode({'sender': SENDER, 'event': event})}"
+
+    with urllib.request.urlopen(urllib.request.Request(url, data=b"", method="POST"), timeout=3) as response:
+        response.read()
+
+
+def foreground_monitor(monitors):
+    """The mss monitor dict containing the centre of the foreground window (fallback: primary)."""
+    try:
+        user32 = ctypes.windll.user32
+        rect = wintypes.RECT()
+        hwnd = user32.GetForegroundWindow()
+
+        if hwnd and user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            cx, cy = (rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2
+
+            for mon in monitors[1:]:
+                if mon["left"] <= cx < mon["left"] + mon["width"] and mon["top"] <= cy < mon["top"] + mon["height"]:
+                    return mon
+    except Exception:
+        pass
+
+    return monitors[1]
+
+
+def dominant_colour(image, min_sat=DOMINANT_MIN_SAT):
+    """Standout colour of a small RGB image: (hue 0-360, sat 0-100, light 0-100, lit fraction 0-1),
+    or (None, None, None, lit fraction) when nothing colourful is on screen. Mirrors the
+    algorithm the effect used when it still read SignalRGB's screen data."""
+    px = (np.asarray(image.convert("RGB")) if isinstance(image, Image.Image) else np.asarray(image))
+    px = px.astype(np.float32).reshape(-1, 3) / 255.0
+    mx, mn = px.max(axis=1), px.min(axis=1)
+    light = (mx + mn) / 2
+    delta = mx - mn
+    denom = 1 - np.abs(2 * light - 1)
+    sat = np.where(delta > 0, delta / np.where(denom > 0, denom, 1), 0)
+    r, g, b = px[:, 0], px[:, 1], px[:, 2]
+    hue = np.zeros_like(mx)
+    m = delta > 0
+    is_r, is_g = (mx == r) & m, (mx == g) & m & ~((mx == r) & m)
+    is_b = m & ~is_r & ~is_g
+    hue[is_r] = ((g - b)[is_r] / delta[is_r]) % 6
+    hue[is_g] = (b - r)[is_g] / delta[is_g] + 2
+    hue[is_b] = (r - g)[is_b] / delta[is_b] + 4
+    hue = (hue * 60) % 360
+    light *= 100
+    sat *= 100
+
+    lit = float((light > 12).mean())
+    ok = (light >= 8) & (light <= 96) & (sat >= min_sat)
+
+    if not ok.any():
+        return None, None, None, lit
+
+    w = (sat[ok] / 100) * (1 - np.abs(light[ok] - 50) / 50 * 0.6)
+    h = hue[ok]
+    bins = 36
+    b_idx = (h // (360 / bins)).astype(int) % bins
+    weight = np.bincount(b_idx, weights=w, minlength=bins)
+    score = weight + 0.5 * (np.roll(weight, 1) + np.roll(weight, -1))
+    best = int(score.argmax())
+
+    if score[best] < 0.5 * (len(px) / 560):          # less than half a cell's worth (scaled to grid size)
+        return None, None, None, lit
+
+    sel = np.isin(b_idx, [best, (best + 1) % bins, (best - 1) % bins])
+    rad = np.deg2rad(h[sel])
+    hue_out = float(np.degrees(np.arctan2((np.sin(rad) * w[sel]).sum(), (np.cos(rad) * w[sel]).sum()))) % 360
+    sat_out = float((sat[ok][sel] * w[sel]).sum() / w[sel].sum())
+    light_out = float((light[ok][sel] * w[sel]).sum() / w[sel].sum())
+    return hue_out, sat_out, light_out, lit
+
+
+class ScreenDominant:
+    """Measures the screen's standout colour a few times per second and sends it to the
+    Sync Screen Dominant effect. Uses GPU desktop duplication (dxcam) when available -
+    it only hands over a frame when the screen changed, so a static screen costs nothing -
+    and falls back to mss (GDI) otherwise."""
+
+    def __init__(self, log=print):
+        import mss
+        self.log = log
+        self.sct = getattr(mss, "MSS", mss.mss)()
+        self.cam = None
+        self.cam_size = None
+        self.dx_ok = True
+        self.last_time = 0.0
+        self.last_event = None
+        self.last_sent = 0.0
+
+    def _dx_frame(self, mon):
+        """Frame (H, W, 4 BGRA) for this monitor via dxcam, None when unchanged, or raises."""
+        import dxcam
+
+        size = (mon["width"], mon["height"])
+
+        if self.cam is None or self.cam_size != size:
+            if self.cam is not None:
+                try:
+                    del self.cam
+                except Exception:
+                    pass
+
+            idx = 0
+
+            for i, info in enumerate(dxcam.output_info().splitlines()):   # "Device[0] Output[0]: Res:(1920, 1080) ..."
+                if f"({size[0]}, {size[1]})" in info:
+                    idx = i
+                    break
+
+            self.cam = dxcam.create(output_idx=idx, output_color="BGRA")
+            self.cam_size = size
+
+        return self.cam.grab()
+
+    def tick(self):
+        now = time.monotonic()
+
+        if now - self.last_time < DOMINANT_INTERVAL:
+            return
+
+        self.last_time = now
+        mon = foreground_monitor(self.sct.monitors)
+        frame = None
+
+        if self.dx_ok:
+            try:
+                frame = self._dx_frame(mon)
+            except Exception as e:
+                self.dx_ok = False
+                self.log(f"Screen : GPU capture unavailable ({e}); using GDI capture")
+
+            if frame is None and self.dx_ok:
+                # screen unchanged since the last frame: just keep the effect fed
+                if self.last_event and now - self.last_sent > 1.0:
+                    self._send(self.last_event, now)
+
+                return
+
+        if frame is None:
+            shot = self.sct.grab(mon)
+            frame = np.frombuffer(shot.bgra, dtype=np.uint8).reshape(shot.height, shot.width, 4)
+
+        # sample every ~12th pixel straight from the raw frame (no full-frame conversion): ~14k pixels
+        step = max(1, min(frame.shape[1] // 160, frame.shape[0] // 90))
+        sample = frame[::step, ::step, :3][:, :, ::-1]           # BGRA -> RGB
+        hue, sat, light, lit = dominant_colour(sample)
+
+        if hue is None:
+            event = f"dominant|none|{lit:.2f}"
+        else:
+            event = f"dominant|{hue:.0f}|{sat:.0f}|{light:.0f}|{lit:.2f}"
+
+        # send on change, and at least every second so a freshly loaded effect gets it quickly
+        if event != self.last_event or now - self.last_sent > 1.0:
+            self._send(event, now)
+
+    def _send(self, event, now):
+        try:
+            send_event(event)
+            self.last_event, self.last_sent = event, now
+        except Exception:
+            pass
+
+
 class AlbumPalette:
     """Same track-change / cover-hash logic as album_bridge.main()."""
 
@@ -1154,6 +1443,7 @@ async def main():
     rules = AppRules(log=print)
     detector = ModeDetector(rules)
     screen = ScreenPalette()
+    dominant = ScreenDominant(log=print)
     album = AlbumPalette(await GlobalSystemMediaTransportControlsSessionManager.request_async())
 
     if MIXER_ENABLED:
@@ -1161,6 +1451,10 @@ async def main():
 
     effects = EffectTable()
     companions = CompanionManager()
+    ensure_effects_installed(log=print)
+    last_effect_check = time.monotonic()
+    pending_verify = None          # (effect name, applied_at) awaiting confirmation in SignalRGB's log
+    effect_warning = ""            # shown in the tray until the next effect switch
     display = DisplayWatcher(log=print) if LIGHTS_OFF_WITH_MONITOR else None
     tray = TrayIcon(log=print, seen_apps=lambda: sonar.seen, rules=rules) if TRAY_ENABLED else None
     was_paused = False
@@ -1239,14 +1533,35 @@ async def main():
                     apply_effect(effect)
                     current_effect = effect
                     effect_applied_at = time.monotonic()
+                    pending_verify = (effect, time.time())
+                    effect_warning = ""
                     print(f"Effect : {effect}")
 
                 # a freshly (re)loaded effect starts without a palette: resend at once
                 last_sent_palette = None
                 last_sent_time = 0.0
 
+            # did SignalRGB really load the effect we asked for? (its log says "Activated '<name>'")
+            if pending_verify is not None and time.monotonic() - effect_applied_at > 4.0:
+                name, applied_at = pending_verify
+                pending_verify = None
+                found = signalrgb_activated(name, applied_at)
+
+                if found is False:
+                    print(f"Effect : WARNING - SignalRGB did not load '{name}'. Check the name in effects.json; "
+                          f"if it is one of ours, restart SignalRGB (it was (re)installed)")
+                    effect_warning = f"'{name}' NOT FOUND in SignalRGB - restart SignalRGB or fix the name"
+
+            if time.monotonic() - last_effect_check > 60:
+                last_effect_check = time.monotonic()
+                ensure_effects_installed(log=print)
+
             if tray is not None:
-                tray.status(mode, reason, current_effect, len(effects.table.get(mode, [])))
+                tray.status(mode, reason + (f" | {effect_warning}" if effect_warning else ""),
+                            current_effect, len(effects.table.get(mode, [])))
+
+            if current_effect == DOMINANT_EFFECT:
+                dominant.tick()
 
             source = MODE_PALETTE.get(mode)
             colors = None

@@ -1,0 +1,105 @@
+<head>
+	<!-- Version 2.0 -->
+	<title>Sync Screen Dominant</title>
+	<meta description="Fills every LED with the single standout colour of your screen - the whole setup turns red on an Impostor reveal, gold in a sunset, blue in the ocean. The colour is measured by the SignalRGB Sync System controller (rgb_controller.py) and sent to this effect, so it needs the controller running.">
+	<meta publisher="Eshan">
+
+	<meta property="satBoost" label="Saturation boost" type="number" min="0" max="100" default="35" tooltip="pushes the picked colour towards a pure colour"/>
+	<meta property="brightness" label="Brightness" type="number" min="10" max="100" default="100"/>
+	<meta property="smoothing" label="Smoothing" type="number" min="0" max="100" default="60" tooltip="0 = react instantly, 100 = drift very slowly between colours"/>
+	<meta property="followBrightness" label="Follow screen brightness" type="boolean" default="1" tooltip="dim screen = dim lights; off = always full colour"/>
+	<meta property="darkScreen" label="When the screen is (almost) black" type="combobox" values="Dim,Keep last colour,Off" default="Dim"/>
+</head>
+
+<body style="margin: 0; padding: 0;">
+	<canvas id="exCanvas" width="320" height="200"></canvas>
+</body>
+
+<script>
+const canvas = document.getElementById("exCanvas");
+const ctx = canvas.getContext("2d");
+const WIDTH = 320, HEIGHT = 200;
+
+// last message from the controller: dominant|<hue 0-360>|<sat 0-100>|<light 0-100>|<lit fraction 0-1>
+//                                or dominant|none|<lit fraction 0-1>   (nothing colourful on screen)
+let target = null;              // {hue, sat, light} or null
+let litFraction = 0;
+let lastMessageAt = 0;
+let curHue = null, curSat = 0, curLight = 0;
+
+function onCanvasApiEvent(apiEvent)
+{
+	if(apiEvent["sender"] !== "AlbumSpectrumBridge")
+	{return;}
+
+	const ev = apiEvent["event"];
+
+	if(typeof ev !== "string" || !ev.startsWith("dominant|"))
+	{return;}
+
+	const parts = ev.split("|");
+	lastMessageAt = performance.now();
+
+	if(parts[1] === "none")
+	{
+		target = null;
+		litFraction = parseFloat(parts[2]) || 0;
+		return;
+	}
+
+	const hue = parseFloat(parts[1]), sat = parseFloat(parts[2]), light = parseFloat(parts[3]);
+
+	if([hue, sat, light].some(v => Number.isNaN(v)))
+	{return;}
+
+	target = {hue: hue, sat: sat, light: light};
+	litFraction = parseFloat(parts[4]) || 1;
+}
+
+function lerpHue(a, b, t)
+{
+	let d = b - a;
+
+	if(d > 180) {d -= 360;}
+	if(d < -180) {d += 360;}
+
+	return (a + d * t + 360) % 360;
+}
+
+function update()
+{
+	const alpha = Math.max(0.02, 1 - smoothing / 100);
+	const stale = performance.now() - lastMessageAt > 4000;     // controller not talking to us
+	const pick = stale ? null : target;
+	let targetLight;
+
+	if(pick === null)
+	{
+		if(darkScreen === "Off" || stale)
+		{targetLight = 0;}
+		else if(darkScreen === "Keep last colour")
+		{targetLight = curLight;}
+		else
+		{targetLight = 12 * Math.min(1, litFraction * 4);}       // Dim: faint glow scaled by how much of the screen is lit
+
+		curLight += (targetLight - curLight) * alpha;
+	}
+	else
+	{
+		const targetSat = Math.min(100, pick.sat + satBoost);
+		targetLight = followBrightness ? Math.max(22, Math.min(55, pick.light)) : 50;
+
+		curHue = curHue === null ? pick.hue : lerpHue(curHue, pick.hue, alpha);
+		curSat += (targetSat - curSat) * alpha;
+		curLight += (targetLight - curLight) * alpha;
+	}
+
+	const l = curLight * brightness / 100;
+	ctx.fillStyle = curHue === null ? "#000000" : `hsl(${curHue.toFixed(1)}, ${curSat.toFixed(1)}%, ${l.toFixed(1)}%)`;
+	ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+	window.requestAnimationFrame(update);
+}
+
+window.requestAnimationFrame(update);
+</script>

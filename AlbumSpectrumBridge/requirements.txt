@@ -12,3 +12,4 @@ mss>=10.0               # screen capture                          (tested 10.2.0
 numpy>=2.0              # audio mixing                            (tested 2.5.3)
 PyAudioWPatch>=0.2.12   # audio capture/playback for the mixer    (tested 0.2.12.8)
 pystray>=0.19           # tray icon                               (tested 0.19.5)
+dxcam>=0.0.5            # GPU screen capture for Sync Screen Dominant (optional; mss fallback)

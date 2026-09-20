@@ -37,11 +37,21 @@ if ($LASTEXITCODE -ne 0) { Fail "Packages did not load correctly. Run Install.ba
 Write-Host "    Packages OK"
 
 # ---------------------------------------------------------------- 3. Effect files
-Step 3 "Putting the effects (Album Pump Up Beats, Lights Off, Screen Dominant) where SignalRGB looks for them..."
-$effectsDir = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WhirlwindFX\Effects"
-New-Item -ItemType Directory -Force -Path $effectsDir | Out-Null
-Get-ChildItem (Join-Path $Root "effect") -Filter *.html | Copy-Item -Destination $effectsDir -Force
-Write-Host "    Copied to $effectsDir"
+Step 3 "Putting the effects (Album Pump Up Beats, Sync Lights Off, Sync Screen Dominant) into SignalRGB..."
+# They go into SignalRGB's own program folder (like its built-in effects): the free tier
+# loads at most 10 custom effects from Documents\WhirlwindFX\Effects, so that folder is
+# unreliable. The controller re-copies them after every SignalRGB update.
+$app = Get-ChildItem (Join-Path $env:LOCALAPPDATA "VortxEngine") -Directory -Filter "app-*" -ErrorAction SilentlyContinue |
+    Sort-Object { [version]($_.Name.Substring(4)) } | Select-Object -Last 1
+if ($app) {
+    $effectsDir = Join-Path $app.FullName "Signal-x64\Effects\Dynamic"
+    New-Item -ItemType Directory -Force -Path $effectsDir | Out-Null
+    Get-ChildItem (Join-Path $Root "effect") -Filter *.html | Copy-Item -Destination $effectsDir -Force
+    Write-Host "    Copied to $effectsDir"
+    Write-Host "    (SignalRGB only scans this folder when it starts - restart SignalRGB after this installer finishes)" -ForegroundColor Yellow
+} else {
+    Write-Host "    SignalRGB program folder not found - is SignalRGB installed? The controller will copy the effects once it is." -ForegroundColor Yellow
+}
 
 # ---------------------------------------------------------------- 4. Startup task
 Step 4 "Making the controller start automatically when you log in..."
@@ -77,7 +87,8 @@ Write-Host "=============================================" -ForegroundColor Gree
 Write-Host "   Installed. The controller is running." -ForegroundColor Green
 Write-Host "=============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Next: finish the SignalRGB settings (Step 8 in the guide):"
+Write-Host "Next:"
+Write-Host "  - Restart SignalRGB once (tray icon > Exit, then open it again) so it finds the new effects"
 Write-Host "  - Settings > Audio > Audio Device = CABLE Input (VB-Audio Virtual Cable)"
 Write-Host "  - Open the 'Album Pump Up Beats' effect once and set Color Style = Album"
 Write-Host ""

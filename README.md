@@ -9,9 +9,9 @@ Your RGB lighting follows what you're doing — automatically.
 | play music (Spotify, AIMP, …) | run the audio‑reactive **Album Pump Up Beats** effect in the **colours of the album cover**, changing with every song |
 | play something in a browser (YouTube, …) | run the same audio‑reactive effect in the **colours of your screen** |
 | watch a film in a video player (VLC, Media Player, …) | mirror the screen (**Screen Ambience**) |
-| play a game | mirror the screen (**Screen Ambience**) — from the moment the game opens. Or use **Screen Dominant** (included): every LED takes the one standout colour of the screen — the whole setup goes red on an Among Us *Impostor* reveal |
+| play a game | mirror the screen (**Screen Ambience**) — from the moment the game opens. Or use **Sync Screen Dominant** (included): every LED takes the one standout colour of the screen — the whole setup goes red on an Among Us *Impostor* reveal |
 | do nothing / pause | show your **idle pattern** (any SignalRGB effect; can rotate between several) |
-| walk away and Windows switches the monitor off | **turn off** — and come back the moment you touch the mouse or keyboard |
+| walk away and Windows switches the monitor off | **turn off** (the included *Sync Lights Off* effect) — and come back the moment you touch the mouse or keyboard |
 
 No clicking, no switching effects by hand. A small helper runs in the background (≈0.01 % CPU) with a tray icon for the rare times you want to override it. Free SignalRGB is enough — no Pro subscription needed.
 
@@ -93,8 +93,11 @@ C:\AlbumSpectrumBridge\rgb_controller.py
 
 ### Step 6 — Run the installer
 1. Open `C:\AlbumSpectrumBridge` and double‑click **`Install.bat`**.
-2. A black window works for 1–2 minutes: it downloads a few Python add‑ons, copies the two effects into `Documents\WhirlwindFX\Effects` (SignalRGB's folder for your own effects), and sets the helper to start automatically when you log in.
+2. A black window works for 1–2 minutes: it downloads a few Python add‑ons, copies the three effects into SignalRGB's program folder, and sets the helper to start automatically when you log in.
 3. It ends with **"Installed. The controller is running."** Press any key to close it.
+4. **Restart SignalRGB once** (its tray icon → Exit, then open it again) — it only looks for new effects when it starts.
+
+> Why the program folder and not `Documents\WhirlwindFX\Effects`? The free tier of SignalRGB loads at most **10** custom effects from the Documents folder and silently ignores the rest. The program folder has no such limit; a SignalRGB update wipes it, so the helper re‑copies the effects automatically (you'll see a note in the log asking for one SignalRGB restart).
 
 > If Windows shows *"Windows protected your PC"*: click **More info → Run anyway**. It's a plain script; you can open it in Notepad.
 
@@ -110,7 +113,7 @@ You can now leave any effect selected; from here on the helper chooses.
 - Play a song in Spotify/AIMP → within ~2 s the audio effect appears in the cover's colours. Skip a track → colours change at once.
 - Pause → after a moment your idle effect comes back.
 - Play a YouTube video → audio effect with screen colours.
-- Open a game → Screen Ambience (even on the loading screen).
+- Open a game → Screen Ambience (even on the loading screen). Try *Sync Screen Dominant* for games via the tray (*Effects for… → Game*): the whole setup takes the screen's standout colour.
 
 Something not right? See [Troubleshooting](#troubleshooting) — `C:\AlbumSpectrumBridge\controller.log` says exactly what the helper saw, with times.
 
@@ -141,7 +144,7 @@ There is nothing to start or click. The helper starts ~10 s after you log in.
 | Menu item | What it does |
 |---|---|
 | *(status lines)* | Current situation + why (e.g. `Music - Aux: spotify.exe`) and the effect showing |
-| **Lights off now** | One click to switch everything off — click again to resume |
+| **Lights off now** | One click to switch everything off (the *Sync Lights Off* effect) — click again to resume |
 | **Pause automation** | Effects stop switching; pick whatever you like in SignalRGB. Untick to resume |
 | **Force mode ▸** | Keep one situation on (e.g. *Game* while you watch a stream) until you choose *Auto* |
 | **Shuffle effect** | Jump to another effect from this situation's list (when it has several) |
@@ -155,7 +158,7 @@ Good to know:
 - Manual picks inside SignalRGB stick until the next automatic change.
 - Effects switch silently — the SignalRGB window doesn't pop up.
 - Short quiet passages inside a song, gaps between tracks and the moment between two YouTube videos don't switch to idle; a real pause does.
-- Lights‑off follows **Windows** switching the monitor off (*Settings → System → Power → Screen timeout*); the monitor's own power button doesn't tell Windows anything. Watching a film keeps the monitor — and the lights — on. Want a faint night glow instead of full off? Open the *Lights Off* effect in SignalRGB and set its *Glow colour*.
+- Lights‑off follows **Windows** switching the monitor off (*Settings → System → Power → Screen timeout*); the monitor's own power button doesn't tell Windows anything. Watching a film keeps the monitor — and the lights — on. Want a faint night glow instead of full off? Open the *Sync Lights Off* effect in SignalRGB and set its *Glow colour*.
 - DRM video in a browser (Netflix, Prime, Disney+) shows as black to Windows, so screen colours can't be read there — the lights keep the last colours. YouTube, Twitch etc. work normally.
 - Pause / Force are forgotten at the next login, so it can't stay in a strange state by accident.
 - Resource use: ≈0.01 % CPU and 50–100 MB of memory; screen‑colour mode adds 1–3 % of one core while a browser plays.
@@ -168,15 +171,17 @@ Everything below is either a tray‑menu action or a text file edited with **Not
 
 ### The included effects
 - **Album Pump Up Beats** — audio‑reactive bars that take their colours from the album cover (music) or the screen (browser).
-- **Screen Dominant** — every LED shows the single standout colour of the screen (built on SignalRGB's own screen analysis, so it costs nothing extra). Great for games: an Impostor reveal turns the whole room red. Settings: saturation boost, brightness, smoothing, what to do on a black screen. Pick it for *Game* / *Film* via the tray's *Effects for…* menu if you prefer it to Screen Ambience's per‑zone mirror.
-- **Lights Off** — everything off (or a faint glow colour of your choice).
+- **Sync Screen Dominant** — every LED shows the single standout colour of the screen. Great for games: an Among Us *Impostor* reveal turns the whole room red. The helper measures the colour (GPU capture, only when the screen changes — negligible cost) and sends it to the effect. Settings: saturation boost, brightness, smoothing, what to do on a black screen. Pick it for *Game* / *Film* via the tray's *Effects for…* menu if you prefer it to Screen Ambience's per‑zone mirror.
+- **Sync Lights Off** — everything off (or a faint glow colour of your choice).
+
+Why the "Sync" prefix? SignalRGB looks effects up on its marketplace by name; a name that also exists there as a paid effect makes SignalRGB lock yours. Unique names avoid that.
 
 ### Which effect for which situation
 Use the tray's **Effects for…** menu. The same information lives in `C:\AlbumSpectrumBridge\effects.json`, which you can also edit by hand — changes apply immediately, no restart:
 
 ```json
 {
-    "AWAY":    ["Lights Off"],
+    "AWAY":    ["Sync Lights Off"],
     "IDLE":    ["Multizone", "Rainbow", "Neon Shift"],
     "GAMING":  ["Screen Ambience"],
     "MOVIE":   ["Screen Ambience"],
@@ -248,7 +253,7 @@ The cover gives three colours; the effect keeps the best two. Find `let score = 
 ### What shows before the first colours arrive
 The effect stays dark until it receives colours and falls back to *Static Color 1/2* after 10 s if nothing arrives (helper not running). Find `albumFallbackAfterMs = 10000` to change that (milliseconds).
 
-The *Lights Off* effect has one setting in SignalRGB (*Glow colour*) and nothing to edit.
+The *Sync Lights Off* effect has one setting in SignalRGB (*Glow colour*) and nothing to edit.
 
 ---
 
@@ -267,11 +272,13 @@ First stop: `C:\AlbumSpectrumBridge\controller.log` — what the helper found at
 | Music shows Screen Ambience instead of the album effect | The player is on the Game channel → move it to Aux in Sonar, or tray → *Apps* → mark it *Music player* |
 | An app is treated as a game / film but isn't | Tray → *Apps* → set it to *Ignore* (or the right category). Log line `-> GAMING (Gaming: xyz.exe)` names the culprit |
 | A notification sound switched the lights | Same: *Apps* → *Ignore*. Most messengers are already ignored |
-| Effect doesn't change although the log says it was applied | Effect name doesn't exactly match SignalRGB, or the effect isn't installed → fix via *Effects for…* |
+| Log says `Effect : WARNING - SignalRGB did not load '…'` | The helper checks SignalRGB's own log after every switch. Either the name doesn't exist in SignalRGB (fix via *Effects for…*) or it's one of ours and SignalRGB hasn't been restarted since it was (re)installed → restart SignalRGB |
+| An effect shows "requires SignalRGB Pro" | Third‑party effects that read SignalRGB's screen data are Pro‑only — ours don't (the helper measures the screen instead). If it's one of ours, its name collides with a marketplace effect: rename it (keep the "Sync" prefix) |
+| A custom effect I put in Documents never appears | Free tier loads only 10 custom effects from `Documents\WhirlwindFX\Effects`. Put it in SignalRGB's program folder instead (`%LOCALAPPDATA%\VortxEngine\app-<version>\Signal-x64\Effects\Dynamic`) and restart SignalRGB |
 | SignalRGB window pops up on every switch | Very old SignalRGB version → update SignalRGB |
 | Lights go idle in quiet parts of songs | The player has no "now playing" info (AIMP without AimpSmtc, rare players) → see AIMP section |
-| Lights don't go off when the monitor does | Log says `Display: watcher unavailable`, or the *Lights Off* effect is missing (run Install.bat). Only Windows switching the display off counts |
-| Everything stopped after a SignalRGB update | Effects must live in `Documents\WhirlwindFX\Effects` (Install.bat puts them there); re‑select Color Style = Album |
+| Lights don't go off when the monitor does | Log says `Display: watcher unavailable`, or *Sync Lights Off* isn't loaded (run Install.bat, then restart SignalRGB). Only Windows switching the display off counts |
+| Everything stopped after a SignalRGB update | The update wiped its program folder; the helper re‑copies the effects within a minute and logs `Effects: installed into SignalRGB … restart SignalRGB once` → restart SignalRGB, re‑select Color Style = Album |
 | Windows changed my sound output to "CABLE Input" | *Settings → System → Sound → Output → SteelSeries Sonar – Gaming* |
 
 Restart the helper any time: tray → **Restart controller**, or `Install.bat`, or in PowerShell `Stop-ScheduledTask SignalRGBController; Start-ScheduledTask SignalRGBController`.
@@ -296,7 +303,7 @@ Restart the helper any time: tray → **Restart controller**, or `Install.bat`, 
 | `rgb_controller.py` | The helper: watches Sonar, switches effects, sends colours, tray icon, lights‑off, AimpSmtc. Settings at the top |
 | `audio_mixer.py` | Combines the Media + Aux channels into the virtual cable SignalRGB listens to |
 | `album_bridge.py` | Reads album covers and picks their colours |
-| `effect\Album Pump Up Beats.html`, `effect\Lights Off.html`, `effect\Screen Dominant.html` | The SignalRGB effects (Install.bat copies them to Documents) |
+| `effect\Album Pump Up Beats.html`, `effect\Sync Lights Off.html`, `effect\Sync Screen Dominant.html` | The SignalRGB effects — the source copies; the installer and the helper place them in SignalRGB's program folder |
 | `requirements.txt`, `scripts\` | Used by the installer |
 | `tests\` | Unit tests for the decision logic (`py tests\test_detector.py`) |
 | `controller.log` | Appears after the first run. Safe to delete; recreated at each start |
@@ -312,7 +319,9 @@ Restart the helper any time: tray → **Restart controller**, or `Install.bat`, 
 - **Audio:** `audio_mixer.py` captures the Sonar Media/Aux loopbacks (8‑ch/96 kHz), folds to stereo and plays into VB‑Cable, which SignalRGB captures.
 - **Lights off:** `RegisterPowerSettingNotification(GUID_CONSOLE_DISPLAY_STATE)` on a message‑only window.
 - COM must be initialised **multi‑threaded** before comtypes loads (`sys.coinit_flags = 0`); in STA the WinRT thumbnail stream calls never return.
-- Not possible from outside SignalRGB (checked): changing the audio capture device, global brightness or device components while it runs — those settings are read at startup only, and the REST API is Pro‑only.
+- **Screen colours for the dominant effect:** `dxcam` (Desktop Duplication) frames, only delivered when the screen changed; stride‑sampled to ~14k pixels; HSL histogram (36 hue bins, saturation/mid‑lightness weighted, circular mean) → `dominant|h|s|l|lit` canvas event at ≤4 Hz. mss fallback.
+- **Effect installation:** into `%LOCALAPPDATA%\VortxEngine\app-<newest>\Signal-x64\Effects\Dynamic` (free tier caps Documents effects at 10). Re‑checked every minute. Each switch is verified against SignalRGB's own log (`EffectRunning: Activated '<name>'`), selecting the log of the running main process by PID because every `signalrgb://` URL spawns a short‑lived helper process with its own log.
+- Not possible from outside SignalRGB (checked): changing the audio capture device, global brightness or device components while it runs — those settings are read at startup only, and the REST API is Pro‑only. Third‑party effects that read `engine.zone` (screen data) are Pro‑locked.
 
 Tests: `py AlbumSpectrumBridge\tests\test_detector.py`.
 

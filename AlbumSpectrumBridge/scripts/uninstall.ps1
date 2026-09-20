@@ -10,11 +10,15 @@ Write-Host "Closing any running controller / AIMP helper..."
 Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "rgb_controller\.py" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Get-Process AimpSmtc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-$effectsDir = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WhirlwindFX\Effects"
-$effects = @("Album Pump Up Beats.html", "Lights Off.html", "Screen Dominant.html") | ForEach-Object { Join-Path $effectsDir $_ } | Where-Object { Test-Path $_ }
+$names = @("Album Pump Up Beats.html", "Sync Lights Off.html", "Sync Screen Dominant.html")
+$dirs = @()
+$app = Get-ChildItem (Join-Path $env:LOCALAPPDATA "VortxEngine") -Directory -Filter "app-*" -ErrorAction SilentlyContinue
+foreach ($a in $app) { $dirs += Join-Path $a.FullName "Signal-x64\Effects\Dynamic" }
+$dirs += Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WhirlwindFX\Effects"
+$effects = foreach ($d in $dirs) { foreach ($n in $names) { $f = Join-Path $d $n; if (Test-Path $f) { $f } } }
 if ($effects) {
-    $answer = Read-Host "Also remove the Album Pump Up Beats, Lights Off and Screen Dominant effects from SignalRGB? (y/n)"
-    if ($answer -match "^[yY]") { $effects | Remove-Item -Force; Write-Host "Effects removed." }
+    $answer = Read-Host "Also remove the Album Pump Up Beats, Sync Lights Off and Sync Screen Dominant effects from SignalRGB? (y/n)"
+    if ($answer -match "^[yY]") { $effects | Remove-Item -Force; Write-Host "Effects removed (restart SignalRGB to refresh its list)." }
 }
 
 Write-Host ""
