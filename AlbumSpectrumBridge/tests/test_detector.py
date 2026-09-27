@@ -110,3 +110,26 @@ rc.EFFECTS_FILE.write_text("{ broken", encoding="utf-8"); time.sleep(0.05); asse
 print("effect table tests passed")
 
 print("ALL TESTS PASSED")
+
+# 15. zones: toggling, masks, twin resolution and the broken-twin fallback
+import zones as zonelib
+rc.ZONES_FILE = rc.Path(TMP) / "zones.json"
+twin_dir = rc.Path(TMP) / "dyn"; twin_dir.mkdir(exist_ok=True)
+rc.signalrgb_effects_dir = lambda: twin_dir
+zm = rc.ZoneManager(log=quiet)
+zm.zones = [dict(id="A", name="Outer", header="H1", x=0, y=0, sx=10, sy=10, rotation=0, flipped=False, flippedV=False, width=2, height=1, leds=[(0, 0), (1, 0)]),
+            dict(id="B", name="Inner", header="H1", x=0, y=50, sx=10, sy=10, rotation=0, flipped=False, flippedV=False, width=1, height=1, leds=[(0, 0)])]
+assert not zm.active and zm.events == ["zones|clear"]
+zm.set_off("A", True); assert zm.active and zm.poll() and not zm.poll()
+assert zm.events[0].startswith("zones|") and zm.events[0].count(";") == 1          # two LED cells of A
+assert json.loads(rc.ZONES_FILE.read_text())["off"] == ["A"]
+sources = {"Sync Lights Off": r"C:\AlbumSpectrumBridge\effect\Sync Lights Off.html",
+           "Screen Ambience": r"C:\Users\eshan\AppData\Local\VortxEngine\app-2.5.74\Signal-x64\Effects\Dynamic\Screen Ambience.html"}
+assert zm.twin_for("Screen Ambience", sources) is None                            # screen effect: never twinned
+assert zm.twin_for("Sync Lights Off", sources) is None                            # first time: created, needs a SignalRGB restart
+assert (twin_dir / "Sync Lights Off (Zones).html").exists()
+zm.broken_twins.clear()                                                           # (as after a restart)
+assert zm.twin_for("Sync Lights Off", sources) == "Sync Lights Off (Zones)"
+zm.broken_twins.add("Sync Lights Off (Zones)"); assert zm.twin_for("Sync Lights Off", sources) is None
+zm.set_off("A", False); assert not zm.active and zm.events == ["zones|clear"]
+print("zones tests passed")

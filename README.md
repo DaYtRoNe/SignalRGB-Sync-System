@@ -145,12 +145,14 @@ There is nothing to start or click. The helper starts ~10 s after you log in.
 |---|---|
 | *(status lines)* | Current situation + why (e.g. `Music - Aux: spotify.exe`) and the effect showing |
 | **Lights off now** | One click to switch everything off (the *Sync Lights Off* effect) — click again to resume |
+| **Keep screen on ▸** | Stops Windows switching the display off (and the PC sleeping) when idle — *30 min / 1 h / 2 h / 4 h / Until I turn it off*. Shows the time left; ends by itself; cleared when the controller restarts. Handy for a long download, a slideshow, or reading without touching the mouse |
 | **Pause automation** | Effects stop switching; pick whatever you like in SignalRGB. Untick to resume |
 | **Force mode ▸** | Keep one situation on (e.g. *Game* while you watch a stream) until you choose *Auto* |
 | **Shuffle effect** | Jump to another effect from this situation's list (when it has several) |
 | **Effects for… ▸** | **The easiest way to choose effects.** Pick a situation, tick any of your installed SignalRGB effects; tick several and one is chosen at random each time. Ticking one for the situation you're in shows it immediately |
 | **Apps ▸** | **Teach it your apps.** Lists every app that made sound recently with what it counts as. Open one to set *Game / Browser / Music player / Video player / Ignore* (e.g. a new media player as *Video player*, a video editor or a chatty app as *Ignore* so it never changes the lights). `*` marks your own rules; *Automatic* removes a rule |
 | **Open effects.json / log / folder** | Shortcuts to the files described below |
+| **Restart SignalRGB** | Closes and reopens SignalRGB (e.g. after new effects were installed); the helper re‑applies the current effect and colours once it's back |
 | **Restart controller** | Restarts the helper (a few seconds of darkness) — use after editing a `.py` file or if something looks stuck |
 | **Quit controller** | Stops the automation until your next login (or `Install.bat`) |
 

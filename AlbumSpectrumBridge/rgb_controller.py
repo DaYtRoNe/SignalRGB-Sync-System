@@ -59,6 +59,7 @@ from winrt.windows.media.control import (
 sys.path.insert(0, str(Path(__file__).parent))
 from album_bridge import extract_dominant_colors, read_thumbnail, send_palette  # noqa: E402
 import audio_mixer  # noqa: E402
+import zones as zonelib  # noqa: E402
 
 
 # ============================== CONFIG ======================================
@@ -172,9 +173,18 @@ SETTLE_RESEND_SECONDS = 1.0
 # timeout). Any key / mouse movement turns the monitor - and the lights - back on.
 LIGHTS_OFF_WITH_MONITOR = True
 
+# SetThreadExecutionState flags for the tray's "Keep screen on"
+ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
+
 # Tray icon with status, "Pause automation", "Force mode", shuffle, and quick
 # links to effects.json / the log. Needs the pystray package.
 TRAY_ENABLED = True
+
+# Zones: switch components (fan rings, strips...) off inside any effect via the
+# tray. Twins of the effects you use are generated into SignalRGB's program
+# folder ("<Effect> (Zones)") and used while at least one zone is off.
+ZONES_FILE = Path(__file__).parent / "zones.json"
+ZONES_ENABLED = False
 
 # Mix Sonar Media + Aux into a virtual cable so SignalRGB can capture both
 # (SignalRGB audio device -> "CABLE Input"). Needs VB-Audio Virtual Cable;
@@ -292,6 +302,50 @@ def ensure_effects_installed(log=print):
 
 
 SIGNALRGB_LOG_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "WhirlwindFX" / "SignalRgb" / "Logs"
+
+
+def signalrgb_main_pid():
+    """PID of the SignalRGB main process (the oldest SignalRgb.exe), or None."""
+    best = None
+
+    for proc in psutil.process_iter(["name", "create_time"]):
+        try:
+            if (proc.info["name"] or "").lower() == "signalrgb.exe":
+                if best is None or proc.info["create_time"] < best[1]:
+                    best = (proc.pid, proc.info["create_time"])
+        except Exception:
+            pass
+
+    return best[0] if best else None
+
+
+def restart_signalrgb(log=print):
+    """Close SignalRGB (gracefully, then forcefully) and start it again via its launcher."""
+    launcher = SIGNALRGB_APP_ROOT / "SignalRgbLauncher.exe"
+
+    if not launcher.exists():
+        found = sorted(SIGNALRGB_APP_ROOT.glob("app-*/SignalRgbLauncher.exe"))
+        launcher = found[-1] if found else None
+
+    if launcher is None:
+        log("SignalRGB: launcher not found, cannot restart")
+        return False
+
+    subprocess.run(["taskkill", "/IM", "SignalRgb.exe"], capture_output=True)      # WM_CLOSE first
+
+    for _ in range(20):
+        if signalrgb_main_pid() is None:
+            break
+
+        time.sleep(0.5)
+    else:
+        subprocess.run(["taskkill", "/F", "/IM", "SignalRgb.exe"], capture_output=True)
+        time.sleep(1)
+
+    subprocess.Popen([str(launcher)], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                     close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    log("SignalRGB: restarting")
+    return True
 
 
 def signalrgb_main_log():
@@ -426,15 +480,19 @@ class TrayIcon:
     FORCE_CHOICES = [("Auto", None), ("Game", "GAMING"), ("Film", "MOVIE"), ("Browser", "BROWSER"),
                      ("Music", "MUSIC"), ("Idle", "IDLE"), ("Lights off", "AWAY")]
 
-    def __init__(self, log=print, seen_apps=None, rules=None):
+    def __init__(self, log=print, seen_apps=None, rules=None, zones=None):
         self.log = log
         self.seen_apps = seen_apps or (lambda: {})
         self.rules = rules
+        self.zones = zones
         self.paused = False
         self.forced = None             # mode name forced from the menu, None = automatic
         self.shuffle_requested = False
         self.quit_requested = False
         self.restart_requested = False
+        self.signalrgb_restart_requested = False
+        self.awake_until = None        # monotonic time until which the screen is kept on (inf = until turned off)
+        self.awake_choice = None
         self.mode, self.reason, self.effect, self.choices = "IDLE", "starting", "-", 1
         self.apply_requested = None    # effect name ticked in the picker for the current mode: apply it now
         self.available = False
@@ -479,6 +537,10 @@ class TrayIcon:
             return Item(label, lambda: self._force(mode), radio=True,
                         checked=lambda item, m=mode: self.forced == m)
 
+        def awake_item(label, minutes):
+            return Item(label, lambda: self._set_awake(minutes), radio=True,
+                        checked=lambda item, m=minutes: self.awake_choice == m)
+
         def picker(mode):
             return Item(self.LABELS[mode], Menu(lambda: self._picker_items(mode)))
 
@@ -487,16 +549,20 @@ class TrayIcon:
             Item(lambda item: f"Effect: {self.effect}", None, enabled=False),
             Menu.SEPARATOR,
             Item("Lights off now", self._toggle_lights_off, checked=lambda item: self.forced == "AWAY"),
+            Item(lambda item: "Keep screen on" + self._awake_left(), Menu(*[awake_item(label, minutes) for label, minutes in self.AWAKE_CHOICES]),
+                 checked=lambda item: self.awake_until is not None),
             Item("Pause automation", self._toggle_pause, checked=lambda item: self.paused),
             Item("Force mode", Menu(*[force_item(label, mode) for label, mode in self.FORCE_CHOICES])),
             Item("Shuffle effect", self._shuffle, enabled=lambda item: self.choices > 1 and not self.paused),
             Item("Effects for...", Menu(*[picker(mode) for mode in ("IDLE", "GAMING", "MOVIE", "BROWSER", "MUSIC", "AWAY")])),
             Item("Apps", Menu(lambda: self._app_items())),
+            Item("Zones", Menu(lambda: self._zone_items()), visible=self.zones is not None),
             Menu.SEPARATOR,
             Item("Open effects.json", lambda: os.startfile(EFFECTS_FILE)),
             Item("Open log", lambda: os.startfile(LOG_FILE)),
             Item("Open folder", lambda: os.startfile(Path(__file__).parent)),
             Menu.SEPARATOR,
+            Item("Restart SignalRGB", self._restart_signalrgb),
             Item("Restart controller", self._restart),
             Item("Quit controller", self._quit),
         )
@@ -509,6 +575,33 @@ class TrayIcon:
     def _toggle_lights_off(self):
         self._force(None if self.forced == "AWAY" else "AWAY")
 
+    # ---- keep screen on: stop Windows turning the display off when idle, for a while
+
+    AWAKE_CHOICES = [("Off", None), ("30 minutes", 30), ("1 hour", 60), ("2 hours", 120), ("4 hours", 240),
+                     ("Until I turn it off", 0)]
+
+    def _set_awake(self, minutes):
+        if minutes is None:
+            self.awake_until, self.awake_choice = None, None
+            self.log("Tray   : keep screen on - off")
+        else:
+            self.awake_until = float("inf") if minutes == 0 else time.monotonic() + minutes * 60
+            self.awake_choice = minutes
+            self.log(f"Tray   : keep screen on - {'until turned off' if minutes == 0 else f'{minutes} min'}")
+
+        self._shown = None
+        self._refresh()
+
+    def _awake_left(self):
+        if self.awake_until is None:
+            return ""
+
+        if self.awake_until == float("inf"):
+            return "  (on)"
+
+        left = max(0, self.awake_until - time.monotonic())
+        return f"  ({int(left // 3600)}h {int(left % 3600 // 60):02d}m left)" if left >= 3600 else f"  ({int(left // 60) + 1} min left)"
+
     # ---- effect picker: tick/untick which effects each mode may use (writes effects.json)
 
     def _installed(self):
@@ -516,7 +609,7 @@ class TrayIcon:
 
         if time.monotonic() - when > 10:
             try:
-                names = sorted(installed_effects(), key=str.lower)
+                names = sorted((n for n in installed_effects() if not n.endswith(zonelib.TWIN_SUFFIX)), key=str.lower)
             except Exception as e:
                 self.log(f"Tray   : effect scan failed ({e})")
 
@@ -596,6 +689,29 @@ class TrayIcon:
 
         return items
 
+    # ---- zones: tick = lit, untick = switched off (painted black by the "(Zones)" twin effects)
+
+    def _zone_items(self):
+        Item, Menu = self._pystray.MenuItem, self._pystray.Menu
+
+        if self.zones is None:
+            return [Item("(zones unavailable)", None, enabled=False)]
+
+        zs = self.zones.zones
+
+        if not zs:
+            return [Item("(no components found in the current SignalRGB layout)", None, enabled=False)]
+
+        def toggle(zid):
+            return lambda: self.zones.set_off(zid, zid not in self.zones.off)
+
+        def is_on(zid):
+            return lambda item: zid not in self.zones.off
+
+        items = [Item("Tick = lit, untick = off (works in effects that have a '(Zones)' twin)", None, enabled=False), Menu.SEPARATOR]
+        items += [Item(f"{z['name']}   ({z['header']})", toggle(z["id"]), checked=is_on(z["id"])) for z in zs]
+        return items
+
     def _toggle_effect(self, mode, name):
         table = self._read_table()
         names = table[mode]
@@ -636,6 +752,9 @@ class TrayIcon:
     def _restart(self):
         self.restart_requested = True
 
+    def _restart_signalrgb(self):
+        self.signalrgb_restart_requested = True
+
     # ------------------------------------------------------------ updates from the main loop
 
     def status(self, mode, reason, effect, choices):
@@ -647,7 +766,7 @@ class TrayIcon:
             return
 
         override = self.paused or self.forced is not None
-        shown = (self.mode, override, self.reason, self.effect)
+        shown = (self.mode, override, self.reason, self.effect, self._awake_left())
 
         if shown == self._shown:
             return
@@ -657,7 +776,8 @@ class TrayIcon:
         try:
             self.icon.icon = self._image(self.mode, override)
             state = " (paused)" if self.paused else (" (forced)" if self.forced else "")
-            self.icon.title = f"SignalRGB Sync System: {self.LABELS.get(self.mode, self.mode)}{state}"
+            awake = f"\nScreen kept on{self._awake_left()}" if self.awake_until is not None else ""
+            self.icon.title = f"SignalRGB Sync System: {self.LABELS.get(self.mode, self.mode)}{state}{awake}"
             self.icon.update_menu()
         except Exception:
             pass
@@ -954,6 +1074,174 @@ class AppRules:
 
         self._recompute()
         self.log(f"Apps   : {name} -> {self.CATEGORIES.get(category, 'automatic')}")
+
+
+# ============================== ZONES =======================================
+
+class ZoneManager:
+    """Which components are switched off (zones.json), their canvas masks for the current
+    SignalRGB layout, and the "(Zones)" twin effects that apply them."""
+
+    def __init__(self, log=print):
+        self.log = log
+        self.off = set()                # component ids switched off
+        self.zones = []                 # components in the current layout (zonelib.zones())
+        self.layout_key = None          # (layout name, placements) the zones were read for
+        self.version = 0                # bumps whenever the mask set changes
+        self.events = ["zones|clear"]
+        self.broken_twins = set()       # twins SignalRGB failed to load this session
+        self.mtime = None
+        self.last_layout_check = 0.0
+        self.pending = False            # a tray toggle happened since the loop last looked
+        self.reload_file()
+        self.refresh_layout(force=True)
+
+    # ---- zones.json
+
+    def reload_file(self):
+        try:
+            mtime = ZONES_FILE.stat().st_mtime
+        except OSError:
+            return False
+
+        if mtime == self.mtime:
+            return False
+
+        self.mtime = mtime
+
+        try:
+            raw = json.loads(ZONES_FILE.read_text(encoding="utf-8"))
+            off = {str(x) for x in raw.get("off", [])}
+        except Exception as e:
+            self.log(f"Zones  : zones.json invalid ({e}), keeping previous")
+            return False
+
+        changed = off != self.off
+        self.off = off
+
+        if changed:
+            self._rebuild()
+
+        return changed
+
+    def set_off(self, zone_id, is_off):
+        if is_off:
+            self.off.add(zone_id)
+        else:
+            self.off.discard(zone_id)
+
+        try:
+            ZONES_FILE.write_text(json.dumps({"off": sorted(self.off)}, indent=4), encoding="utf-8")
+            self.mtime = ZONES_FILE.stat().st_mtime
+        except OSError as e:
+            self.log(f"Zones  : could not write zones.json ({e})")
+
+        name = next((z["name"] for z in self.zones if z["id"] == zone_id), zone_id)
+        self.log(f"Zones  : {name} -> {'OFF' if is_off else 'on'}")
+        self._rebuild()
+        self.pending = True
+
+    def poll(self):
+        """True when anything changed since the last poll (file, layout or a tray toggle)."""
+        changed = self.reload_file() | self.refresh_layout() | self.pending
+        self.pending = False
+        return changed
+
+    # ---- layout
+
+    def refresh_layout(self, force=False):
+        """Re-read the layout when SignalRGB's current layout (or a placement) changed."""
+        now = time.monotonic()
+
+        if not force and now - self.last_layout_check < 5.0:
+            return False
+
+        self.last_layout_check = now
+
+        try:
+            zs = zonelib.zones()
+        except Exception as e:
+            self.log(f"Zones  : could not read the SignalRGB layout ({e})")
+            return False
+
+        key = (zonelib.current_layout_name(), json.dumps(zs, sort_keys=True))
+
+        if key == self.layout_key:
+            return False
+
+        self.layout_key = key
+        self.zones = zs
+
+        if force or self.off:
+            self.log(f"Zones  : layout '{key[0]}' - {len(zs)} components")
+
+        self._rebuild()
+        return True
+
+    def _rebuild(self):
+        polys = []
+
+        for z in self.zones:
+            if z["id"] in self.off:
+                polys += zonelib.led_polygons(z)
+
+        self.version += 1
+        self.events = zonelib.mask_events(polys, self.version)
+
+    @property
+    def active(self):
+        return bool(self.off) and any(z["id"] in self.off for z in self.zones)
+
+    # ---- twins
+
+    def twin_for(self, effect_name, sources):
+        """Name of the twin to apply for this effect while zones are active, or None
+        (screen effects, missing source, or a twin SignalRGB failed to load)."""
+        if effect_name.endswith(zonelib.TWIN_SUFFIX):
+            return effect_name
+
+        twin = zonelib.twin_name(effect_name)
+
+        if twin in self.broken_twins:
+            return None
+
+        target = signalrgb_effects_dir()
+        source = sources.get(effect_name)
+
+        if target is None or source is None:
+            return None
+
+        ok, why = zonelib.can_twin(source)
+
+        if not ok:
+            return None
+
+        try:
+            path, created = zonelib.make_twin(effect_name, source, target)
+        except OSError as e:
+            self.log(f"Zones  : could not create twin for {effect_name} ({e})")
+            return None
+
+        if created:
+            self.log(f"Zones  : created '{twin}' in SignalRGB - restart SignalRGB once to load it")
+            self.broken_twins.add(twin)          # cannot be used until SignalRGB rescans
+            return None
+
+        return twin
+
+    def prepare_twins(self, effect_names, sources):
+        """Generate twins for all effects in use so a SignalRGB restart is needed only once."""
+        for name in effect_names:
+            self.twin_for(name, sources)
+
+    def send_masks(self):
+        for event in self.events:
+            try:
+                send_event(event)
+            except Exception:
+                return False
+
+        return True
 
 
 # ============================== SONAR METERS ================================
@@ -1499,7 +1787,16 @@ async def main():
     pending_verify = None          # (effect name, applied_at) awaiting confirmation in SignalRGB's log
     effect_warning = ""            # shown in the tray until the next effect switch
     display = DisplayWatcher(log=print) if LIGHTS_OFF_WITH_MONITOR else None
-    tray = TrayIcon(log=print, seen_apps=lambda: sonar.seen, rules=rules) if TRAY_ENABLED else None
+    zone_mgr = ZoneManager(log=print) if ZONES_ENABLED else None
+    tray = TrayIcon(log=print, seen_apps=lambda: sonar.seen, rules=rules, zones=zone_mgr) if TRAY_ENABLED else None
+    effect_sources = {}
+    base_effect = None             # effect chosen for the mode, before zone substitution
+    last_masks_sent = 0.0
+    zones_dirty = False            # re-resolve the effect on the next loop (e.g. a twin failed to load)
+    keep_awake = False             # "Keep screen on" currently requested from Windows
+    signalrgb_pid = signalrgb_main_pid()
+    signalrgb_seen_at = time.monotonic()
+    signalrgb_ready_logged = True
     was_paused = False
     current_mode = None
     current_effect = None      # effect we last applied; None = unknown (whatever SignalRGB shows)
@@ -1522,6 +1819,39 @@ async def main():
 
             if display is not None and not display.display_on:
                 mode, reason = "AWAY", "monitor off"   # monitor is off: lights off, whatever else is happening
+
+            # keep screen on: SetThreadExecutionState is per thread, so it is set/cleared here on the main thread
+            if tray is not None:
+                if tray.awake_until is not None and time.monotonic() >= tray.awake_until:
+                    tray._set_awake(None)                     # time is up
+
+                want_awake = tray.awake_until is not None
+
+                if want_awake != keep_awake:
+                    flags = ES_CONTINUOUS | (ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED if want_awake else 0)
+                    ctypes.windll.kernel32.SetThreadExecutionState(flags)
+                    keep_awake = want_awake
+
+            if tray is not None and tray.signalrgb_restart_requested:
+                tray.signalrgb_restart_requested = False
+                print("Tray   : restart SignalRGB")
+                threading.Thread(target=restart_signalrgb, args=(print,), daemon=True).start()
+
+            # SignalRGB (re)started? once it has been up ~20 s, apply the current effect, colours and zones again
+            pid_now = signalrgb_main_pid()
+
+            if pid_now != signalrgb_pid:
+                signalrgb_pid, signalrgb_seen_at, signalrgb_ready_logged = pid_now, time.monotonic(), pid_now is None
+
+            if pid_now is not None and not signalrgb_ready_logged and time.monotonic() - signalrgb_seen_at > 20:
+                signalrgb_ready_logged = True
+                print("SignalRGB: started - re-applying the current effect")
+
+                if zone_mgr is not None:
+                    zone_mgr.broken_twins.clear()
+
+                current_effect = None
+                zones_dirty = True
 
             if tray is not None and tray.quit_requested:
                 print("Tray   : quit - controller stopped (run Install.bat or log in again to restart)")
@@ -1546,6 +1876,22 @@ async def main():
 
             mode_changed = mode != current_mode
             table_changed = effects.reload()
+            zones_changed = False
+
+            if zone_mgr is not None:
+                zones_changed = zone_mgr.poll() | zones_dirty
+                zones_dirty = False
+
+                if table_changed or not effect_sources:
+                    try:
+                        effect_sources = {name: str(path) for name, path in installed_effects().items()}
+                    except Exception:
+                        pass
+
+                    for name in EFFECT_SOURCE_DIR.glob("*.html"):
+                        effect_sources.setdefault(name.stem, str(name))
+
+                    zone_mgr.prepare_twins({n for names in effects.table.values() for n in names}, effect_sources)
             paused_now = tray is not None and tray.paused
             resumed = was_paused and not paused_now
             was_paused = paused_now
@@ -1563,14 +1909,26 @@ async def main():
             if tray is not None:
                 tray.apply_requested = None
 
-            if (mode_changed or table_changed or resumed or shuffle or requested) and not paused_now:
-                effect = effects.pick(mode)
-
-                if requested and requested in effects.table.get(mode, []):
-                    effect = requested
-                    effects.last_pick[mode] = requested
-                elif shuffle and effect == current_effect:
+            if (mode_changed or table_changed or resumed or shuffle or requested or zones_changed) and not paused_now:
+                if zones_changed and not (mode_changed or table_changed or resumed or shuffle or requested) and base_effect:
+                    effect = base_effect                      # only the zone state changed: keep the same effect
+                else:
                     effect = effects.pick(mode)
+
+                    if requested and requested in effects.table.get(mode, []):
+                        effect = requested
+                        effects.last_pick[mode] = requested
+                    elif shuffle and effect == base_effect:
+                        effect = effects.pick(mode)
+
+                base_effect = effect
+
+                # while any zone is off, show the "(Zones)" twin of the effect instead
+                if zone_mgr is not None and zone_mgr.active:
+                    twin = zone_mgr.twin_for(effect, effect_sources)
+
+                    if twin:
+                        effect = twin
 
                 if effect != current_effect:
                     apply_effect(effect)
@@ -1594,6 +1952,19 @@ async def main():
                     print(f"Effect : WARNING - SignalRGB did not load '{name}'. Check the name in effects.json; "
                           f"if it is one of ours, restart SignalRGB (it was (re)installed)")
                     effect_warning = f"'{name}' NOT FOUND in SignalRGB - restart SignalRGB or fix the name"
+
+                    if zone_mgr is not None and name.endswith(zonelib.TWIN_SUFFIX):
+                        zone_mgr.broken_twins.add(name)      # fall back to the plain effect until SignalRGB restarts
+                        zones_dirty = True
+
+            # masks for the twin: right after a switch every second, then every 15 s, and on change
+            if zone_mgr is not None and current_effect and current_effect.endswith(zonelib.TWIN_SUFFIX):
+                now = time.monotonic()
+                settling = now - effect_applied_at < SETTLE_SECONDS
+
+                if zones_changed or now - last_masks_sent >= (SETTLE_RESEND_SECONDS if settling else ALBUM_RESEND_SECONDS):
+                    if zone_mgr.send_masks():
+                        last_masks_sent = now
 
             if time.monotonic() - last_effect_check > 60:
                 last_effect_check = time.monotonic()
