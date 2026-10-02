@@ -178,6 +178,10 @@ SETTLE_RESEND_SECONDS = 1.0
 # timeout). Any key / mouse movement turns the monitor - and the lights - back on.
 LIGHTS_OFF_WITH_MONITOR = True
 
+# Safety net: the controller normally uses 60-100 MB. Above this it restarts itself
+# (takes ~5 s, lights keep their current effect meanwhile).
+MEMORY_LIMIT_MB = 400
+
 # SetThreadExecutionState flags for the tray's "Keep screen on"
 ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
 
@@ -1628,12 +1632,7 @@ class ScreenDominant:
         size = (mon["width"], mon["height"])
 
         if self.cam is None or self.cam_size != size:
-            if self.cam is not None:
-                try:
-                    del self.cam
-                except Exception:
-                    pass
-
+            self.release()
             idx = 0
 
             for i, info in enumerate(dxcam.output_info().splitlines()):   # "Device[0] Output[0]: Res:(1920, 1080) ..."
@@ -1641,10 +1640,30 @@ class ScreenDominant:
                     idx = i
                     break
 
-            self.cam = dxcam.create(output_idx=idx, output_color="BGRA")
+            # max_buffer_len=2: dxcam re-allocates its ring buffer on every fullscreen/alt-tab
+            # "access loss"; the default 8 full frames (~66 MB) each time is what ran memory out
+            self.cam = dxcam.create(output_idx=idx, output_color="BGRA", max_buffer_len=2)
             self.cam_size = size
 
         return self.cam.grab()
+
+    def release(self):
+        """Free the GPU capture (called when the dominant effect is not showing)."""
+        if self.cam is not None:
+            try:
+                self.cam.release()
+            except Exception:
+                pass
+
+            self.cam = None
+            self.cam_size = None
+            import gc
+            gc.collect()
+
+    def idle(self):
+        """Release the capture once the effect has not been fed for a while."""
+        if self.cam is not None and time.monotonic() - self.last_time > 10.0:
+            self.release()
 
     def tick(self):
         now = time.monotonic()
@@ -1828,8 +1847,9 @@ async def main():
     dominant = ScreenDominant(log=print)
     album = AlbumPalette(await GlobalSystemMediaTransportControlsSessionManager.request_async())
 
-    if MIXER_ENABLED:
-        audio_mixer.run_in_thread(log=print)
+    mixer = audio_mixer.run_in_thread(log=print) if MIXER_ENABLED else None
+    mixer_wanted = mixer is not None and mixer.running          # only watch it if it could start at all
+    last_health_check = time.monotonic()
 
     effects = EffectTable()
     companions = CompanionManager()
@@ -2032,6 +2052,38 @@ async def main():
 
             if current_effect == DOMINANT_EFFECT:
                 dominant.tick()
+            else:
+                dominant.idle()
+
+            # health checks every 5 s: restart a dead/stalled audio mixer (the music bars depend on it),
+            # and restart the whole controller if memory ever runs away
+            if time.monotonic() - last_health_check > 5.0:
+                last_health_check = time.monotonic()
+
+                if mixer_wanted and not audio_mixer.healthy(mixer):
+                    print("Mixer  : not running - restarting it")
+
+                    try:
+                        mixer.stop()
+                    except Exception:
+                        pass
+
+                    mixer = audio_mixer.run_in_thread(log=print)
+
+                try:
+                    private_mb = psutil.Process().memory_info().private / 2**20
+                except Exception:
+                    private_mb = 0
+
+                if private_mb > MEMORY_LIMIT_MB:
+                    print(f"Health : memory {private_mb:.0f} MB > {MEMORY_LIMIT_MB} MB - restarting the controller")
+
+                    if schedule_restart():
+                        if tray is not None:
+                            tray.stop()
+
+                        sys.stdout.flush()
+                        os._exit(0)
 
             source = MODE_PALETTE.get(mode)
             colors = None

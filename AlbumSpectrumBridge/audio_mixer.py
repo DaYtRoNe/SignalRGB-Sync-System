@@ -206,6 +206,7 @@ class ChannelMixer:
         return callback
 
     def _output_callback(self, in_data, frame_count, time_info, status):
+        self.last_callback = time.monotonic()      # heartbeat for healthy()
         mix = np.zeros((frame_count, self.out_channels), dtype=np.float32)
 
         for channel, buf in self.buffers.items():
@@ -241,17 +242,37 @@ def run_in_thread(log=print):
     started = threading.Event()
 
     def worker():
-        if mixer.start():
+        try:
+            if mixer.start():
+                started.set()
+
+                while mixer.running:
+                    time.sleep(1)
+            else:
+                started.set()
+        except BaseException as e:                 # never die silently: healthy() turns False
+            mixer.running = False
+            log(f"Mixer  : stopped by an error ({type(e).__name__}: {e})")
             started.set()
 
-            while mixer.running:
-                time.sleep(1)
-        else:
-            started.set()
-
-    threading.Thread(target=worker, name="audio-mixer", daemon=True).start()
+    mixer.thread = threading.Thread(target=worker, name="audio-mixer", daemon=True)
+    mixer.thread.start()
     started.wait(10)
     return mixer
+
+
+def healthy(mixer):
+    """False when the mixer thread died or the audio callback stalled (no output for 5 s)."""
+    if mixer is None or not mixer.running:
+        return False
+
+    thread = getattr(mixer, "thread", None)
+
+    if thread is not None and not thread.is_alive():
+        return False
+
+    last = getattr(mixer, "last_callback", None)
+    return last is None or time.monotonic() - last < 5.0
 
 
 if __name__ == "__main__":
