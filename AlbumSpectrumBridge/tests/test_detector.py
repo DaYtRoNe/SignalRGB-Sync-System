@@ -15,6 +15,8 @@ rc.APPS_FILE = rc.Path(TMP) / "apps.json"
 rc.ENTER_SECONDS = {m: 0.0 for m in rc.MODE_PRIORITY}   # decide instantly unless a test says otherwise
 rc.EXIT_SECONDS = 0.3
 rc.PAUSE_EXIT_SECONDS = {"MUSIC": 0.1, "BROWSER": 0.15, "MOVIE": 0.15}
+rc.STREAM_CLOSED_EXIT = 0.05
+rc.EXIT_SECONDS_PLAYING = 0.6
 quiet = lambda *a, **k: None
 
 
@@ -108,6 +110,21 @@ picks = [t.pick("IDLE") for _ in range(20)]
 assert all(a != b for a, b in zip(picks, picks[1:])) and set(picks) <= {"Rainbow", "Neon Shift", "Multizone"}
 rc.EFFECTS_FILE.write_text("{ broken", encoding="utf-8"); time.sleep(0.05); assert t.reload() is False
 print("effect table tests passed")
+
+
+# 16. faster exits: a closed stream leaves almost at once; "now playing = Playing" holds through a quiet gap
+rc.EXIT_SECONDS = 0.3
+d = rc.ModeDetector(rules)
+s.data = {"Media": {"kmplayer.exe": (0.3, True)}}; assert d.update(s) == "MOVIE"
+s.data = {"Media": {"kmplayer.exe": (0.0, False)}}                       # paused/stopped: stream closed
+assert d.update(s) == "MOVIE"; time.sleep(0.08); assert d.update(s) == "IDLE", "closed stream should exit fast"
+s.data = {"Gaming": {"pubg.exe": (0.0, True)}}; assert d.update(s) == "GAMING"
+s.data = {}; time.sleep(0.08); assert d.update(s) == "IDLE", "game exit should be fast"
+s.data = {"Aux": {"spotify.exe": (0.4, True)}}; assert d.update(s) == "MUSIC"
+s.data = {"Aux": {"spotify.exe": (0.0, True)}}                           # track gap, session says Playing
+time.sleep(0.4); assert d.update(s, media_playing=True) == "MUSIC", "playing gap must hold past EXIT_SECONDS"
+time.sleep(0.3); assert d.update(s, media_playing=True) == "IDLE"
+print("fast exit tests passed")
 
 print("ALL TESTS PASSED")
 

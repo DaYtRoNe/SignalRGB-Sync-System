@@ -143,16 +143,18 @@ AUDIO_THRESHOLD = 0.01     # peak level (0-1) above which a channel counts as pl
 # How long a channel must be active before its mode is entered (guards against
 # short notification sounds), and how long it must be silent before it is left.
 ENTER_SECONDS = {
-    "GAMING": 3.0,         # a game keeps its stream open from the first second; notification sounds do not
+    "GAMING": 2.0,         # a game keeps its stream open from the first second; notification sounds do not
     "MUSIC": 0.5,
     "BROWSER": 1.0,        # a web-app "ding" should not switch effects
     "MOVIE": 1.0,
 }
-EXIT_SECONDS = 8.0
-# When the playing app reports "Paused" AND is silent, leave its mode after this
-# long instead of the full EXIT_SECONDS. Not instant: between two YouTube videos
+# How long a mode survives once its app goes quiet - whichever signal is available wins:
+STREAM_CLOSED_EXIT = 1.0   # the app closed its audio stream (exited, stopped, most players on pause)
+# "now playing" says Paused while silent. Not instant: between two YouTube videos
 # (or Spotify tracks) apps briefly report Paused while silent, which is not a pause.
-PAUSE_EXIT_SECONDS = {"MUSIC": 1.5, "BROWSER": 4.0, "MOVIE": 4.0}
+PAUSE_EXIT_SECONDS = {"MUSIC": 1.0, "BROWSER": 2.0, "MOVIE": 2.0}
+EXIT_SECONDS = 4.0         # silent with the stream still open and no other information
+EXIT_SECONDS_PLAYING = 10.0  # silent but "now playing" says Playing: gap between tracks, quiet passage
 POLL_SECONDS = 0.25        # how often the meters are read
 
 SCREEN_INTERVAL = 0.5      # seconds between screen colour updates in BROWSER mode
@@ -1403,10 +1405,16 @@ class ModeDetector:
 
         return active
 
-    def update(self, sonar, media_paused=False):
+    def update(self, sonar, media_paused=False, media_playing=False):
         now = time.monotonic()
         active = self._active_now(sonar)
         self.reasons = active
+
+        # apps that still have an audio stream open anywhere (a closed stream = stopped / exited / paused)
+        open_streams = set()
+
+        for channel in ("Gaming", "Media", "Aux", "Chat", "Stream"):
+            open_streams |= {n for n, (_, stream_open) in sonar.sessions(channel).items() if stream_open}
 
         for mode, reason in active.items():
             self.procs[mode] = self._procs_of(reason)
@@ -1420,11 +1428,8 @@ class ModeDetector:
                 # a few seconds apart must not add up to a "game"
                 if now - self.first_seen[mode] >= ENTER_SECONDS.get(mode, 1.0):
                     self.entered.add(mode)
-            elif mode in self.first_seen and (
-                now - self.last_seen[mode] > EXIT_SECONDS
-                # explicit pause: shorter grace, but it must persist (video/track transitions look like this too)
-                or (media_paused and now - self.last_seen[mode] > PAUSE_EXIT_SECONDS.get(mode, 2.0))
-            ):
+            elif mode in self.first_seen and self._should_exit(mode, now - self.last_seen[mode],
+                                                                media_paused, media_playing, open_streams):
                 del self.first_seen[mode]
                 del self.last_seen[mode]
                 self.procs.pop(mode, None)
@@ -1440,6 +1445,20 @@ class ModeDetector:
                 return mode
 
         return "IDLE"
+
+    def _should_exit(self, mode, quiet_for, media_paused, media_playing, open_streams):
+        procs = self.procs.get(mode, set())
+
+        if procs and not (procs & open_streams):
+            return quiet_for > STREAM_CLOSED_EXIT          # its app closed the stream / exited
+
+        if media_paused:
+            return quiet_for > PAUSE_EXIT_SECONDS.get(mode, 2.0)
+
+        if media_playing:
+            return quiet_for > EXIT_SECONDS_PLAYING        # gap between tracks / quiet passage
+
+        return quiet_for > EXIT_SECONDS
 
 
 # ============================== PALETTE SOURCES =============================
@@ -1713,6 +1732,19 @@ class AlbumPalette:
 
         return None
 
+    def status(self, procs):
+        """'paused', 'playing' or None for the media session of one of these processes."""
+        try:
+            session = self.session_for(procs)
+
+            if session is None:
+                return None
+
+            st = session.get_playback_info().playback_status
+            return "paused" if st == PlaybackStatus.PAUSED else ("playing" if st == PlaybackStatus.PLAYING else None)
+        except Exception:
+            return None
+
     def is_paused(self, procs):
         """True when the session of one of these processes reports Paused."""
         try:
@@ -1795,6 +1827,7 @@ async def main():
     zones_dirty = False            # re-resolve the effect on the next loop (e.g. a twin failed to load)
     keep_awake = False             # "Keep screen on" currently requested from Windows
     signalrgb_pid = signalrgb_main_pid()
+    pid_checked_at = time.monotonic()
     signalrgb_seen_at = time.monotonic()
     signalrgb_ready_logged = True
     was_paused = False
@@ -1809,8 +1842,8 @@ async def main():
             companions.update()
 
             # pause status of the app behind the mode we are in
-            paused = current_mode in detector.procs and album.is_paused(detector.procs[current_mode])
-            mode = detector.update(sonar, media_paused=paused)
+            status = album.status(detector.procs[current_mode]) if current_mode in detector.procs else None
+            mode = detector.update(sonar, media_paused=status == "paused", media_playing=status == "playing")
 
             reason = detector.reasons.get(mode, "nothing playing")
 
@@ -1838,7 +1871,11 @@ async def main():
                 threading.Thread(target=restart_signalrgb, args=(print,), daemon=True).start()
 
             # SignalRGB (re)started? once it has been up ~20 s, apply the current effect, colours and zones again
-            pid_now = signalrgb_main_pid()
+            if time.monotonic() - pid_checked_at > 3.0:
+                pid_checked_at = time.monotonic()
+                pid_now = signalrgb_main_pid()
+            else:
+                pid_now = signalrgb_pid
 
             if pid_now != signalrgb_pid:
                 signalrgb_pid, signalrgb_seen_at, signalrgb_ready_logged = pid_now, time.monotonic(), pid_now is None
