@@ -154,7 +154,7 @@ There is nothing to start or click. The helper starts ~10 s after you log in.
 | **Open effects.json / log / folder** | Shortcuts to the files described below |
 | **Restart SignalRGB** | Closes and reopens SignalRGB (e.g. after new effects were installed); the helper re‑applies the current effect and colours once it's back |
 | **Restart controller** | Restarts the helper (a few seconds of darkness) — use after editing a `.py` file or if something looks stuck |
-| **Quit controller** | Stops the automation until your next login (or `Install.bat`) |
+| **Quit controller** | Stops the automation until your next login — or double‑click `Start controller.bat` |
 
 Good to know:
 - Manual picks inside SignalRGB stick until the next automatic change.
@@ -299,6 +299,7 @@ Restart the helper any time: tray → **Restart controller**, or `Install.bat`, 
 | File | What it is |
 |---|---|
 | `Install.bat` / `Uninstall.bat` | Set everything up / remove it. Double‑click |
+| `Start controller.bat` | Starts the helper again after *Quit controller* (or if it isn't running) |
 | `Run controller with a window (troubleshooting).bat` | Runs the helper in a visible window |
 | `effects.json` | Which effect(s) for which situation (tray → *Effects for…*) |
 | `apps.json` | Your app rules (tray → *Apps*); appears after the first rule |
