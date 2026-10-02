@@ -153,6 +153,9 @@ STREAM_CLOSED_EXIT = 1.0   # the app closed its audio stream (exited, stopped, m
 # "now playing" says Paused while silent. Not instant: between two YouTube videos
 # (or Spotify tracks) apps briefly report Paused while silent, which is not a pause.
 PAUSE_EXIT_SECONDS = {"MUSIC": 1.0, "BROWSER": 2.0, "MOVIE": 2.0}
+# stream still open but its level is exactly 0 (digital silence): players like KMPlayer keep
+# the stream open while paused; real content - even a quiet scene - stays above 0
+DIGITAL_SILENCE_EXIT = 1.5
 EXIT_SECONDS = 4.0         # silent with the stream still open and no other information
 EXIT_SECONDS_PLAYING = 10.0  # silent but "now playing" says Playing: gap between tracks, quiet passage
 POLL_SECONDS = 0.25        # how often the meters are read
@@ -1353,6 +1356,7 @@ class ModeDetector:
         self.reasons = {}
         self.procs = {}            # mode -> processes behind it, kept while the mode is alive (also during gaps/pause)
         self.entered = set()       # modes that passed their enter delay; they stay until the exit grace runs out
+        self.last_signal = {}      # mode -> last time its apps produced any non-zero level
 
     @staticmethod
     def _procs_of(reason):
@@ -1410,11 +1414,21 @@ class ModeDetector:
         active = self._active_now(sonar)
         self.reasons = active
 
-        # apps that still have an audio stream open anywhere (a closed stream = stopped / exited / paused)
+        # apps that still have an audio stream open anywhere (a closed stream = stopped / exited / paused),
+        # and when each mode's apps last produced any signal at all (> exact 0)
         open_streams = set()
+        peaks = {}
 
         for channel in ("Gaming", "Media", "Aux", "Chat", "Stream"):
-            open_streams |= {n for n, (_, stream_open) in sonar.sessions(channel).items() if stream_open}
+            for n, (peak, stream_open) in sonar.sessions(channel).items():
+                if stream_open:
+                    open_streams.add(n)
+
+                peaks[n] = max(peaks.get(n, 0.0), peak)
+
+        for mode, procs in self.procs.items():
+            if any(peaks.get(n, 0.0) > 0.0 for n in procs):
+                self.last_signal[mode] = now
 
         for mode, reason in active.items():
             self.procs[mode] = self._procs_of(reason)
@@ -1429,11 +1443,13 @@ class ModeDetector:
                 if now - self.first_seen[mode] >= ENTER_SECONDS.get(mode, 1.0):
                     self.entered.add(mode)
             elif mode in self.first_seen and self._should_exit(mode, now - self.last_seen[mode],
-                                                                media_paused, media_playing, open_streams):
+                                                                media_paused, media_playing, open_streams,
+                                                                now - self.last_signal.get(mode, self.last_seen[mode])):
                 del self.first_seen[mode]
                 del self.last_seen[mode]
                 self.procs.pop(mode, None)
                 self.entered.discard(mode)
+                self.last_signal.pop(mode, None)
             elif mode in self.first_seen and mode not in self.entered:
                 # went quiet before ever qualifying (a "ding"): forget it right away
                 del self.first_seen[mode]
@@ -1446,7 +1462,7 @@ class ModeDetector:
 
         return "IDLE"
 
-    def _should_exit(self, mode, quiet_for, media_paused, media_playing, open_streams):
+    def _should_exit(self, mode, quiet_for, media_paused, media_playing, open_streams, zero_for=0.0):
         procs = self.procs.get(mode, set())
 
         if procs and not (procs & open_streams):
@@ -1457,6 +1473,9 @@ class ModeDetector:
 
         if media_playing:
             return quiet_for > EXIT_SECONDS_PLAYING        # gap between tracks / quiet passage
+
+        if zero_for > DIGITAL_SILENCE_EXIT:
+            return True                                    # stream open but exactly silent: paused (KMPlayer & co)
 
         return quiet_for > EXIT_SECONDS
 

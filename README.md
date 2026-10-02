@@ -210,6 +210,7 @@ All settings are near the top, each with a comment. After editing, use the tray'
 | Switch faster/slower when something starts | `ENTER_SECONDS = {` | Seconds to wait per situation |
 | Wait longer/shorter before going idle after sound stops | `EXIT_SECONDS = 4.0` | Seconds of silence when nothing else is known |
 | How fast a closed / stopped app is noticed | `STREAM_CLOSED_EXIT = 1.0` | Seconds after the app closes its audio stream (most players do on pause; games on exit) |
+| Notice a pause in players that keep their stream open (KMPlayer…) | `DIGITAL_SILENCE_EXIT = 1.5` | Seconds of exact silence before it counts as paused |
 | Hold the music effect through gaps between tracks | `EXIT_SECONDS_PLAYING = 10.0` | Seconds of silence tolerated while the player reports *Playing* |
 | React faster/slower to a real pause | `PAUSE_EXIT_SECONDS = {` | Seconds a pause must last before it counts |
 | Screen colours update faster/slower | `SCREEN_INTERVAL = 0.5` | Seconds between screen reads |

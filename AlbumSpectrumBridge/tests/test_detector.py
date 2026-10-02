@@ -124,6 +124,13 @@ s.data = {"Aux": {"spotify.exe": (0.4, True)}}; assert d.update(s) == "MUSIC"
 s.data = {"Aux": {"spotify.exe": (0.0, True)}}                           # track gap, session says Playing
 time.sleep(0.4); assert d.update(s, media_playing=True) == "MUSIC", "playing gap must hold past EXIT_SECONDS"
 time.sleep(0.3); assert d.update(s, media_playing=True) == "IDLE"
+rc.DIGITAL_SILENCE_EXIT = 0.1
+d = rc.ModeDetector(rules)
+s.data = {"Media": {"kmplayer.exe": (0.3, True)}}; assert d.update(s) == "MOVIE"
+s.data = {"Media": {"kmplayer.exe": (0.004, True)}}                      # quiet scene: below threshold but not zero
+time.sleep(0.15); assert d.update(s) == "MOVIE", "quiet scene must not count as paused"
+s.data = {"Media": {"kmplayer.exe": (0.0, True)}}                        # paused: open stream, exact zero
+d.update(s); time.sleep(0.15); assert d.update(s) == "IDLE", "exact digital silence should exit fast"
 print("fast exit tests passed")
 
 print("ALL TESTS PASSED")
