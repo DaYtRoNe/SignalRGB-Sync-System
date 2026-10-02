@@ -178,9 +178,10 @@ SETTLE_RESEND_SECONDS = 1.0
 # timeout). Any key / mouse movement turns the monitor - and the lights - back on.
 LIGHTS_OFF_WITH_MONITOR = True
 
-# Safety net: the controller normally uses 60-100 MB. Above this it restarts itself
-# (takes ~5 s, lights keep their current effect meanwhile).
-MEMORY_LIMIT_MB = 400
+# Safety net against leaks: if the controller's committed memory grows this much above
+# what it settled at a minute after start (~400 MB committed / ~90 MB really used),
+# it restarts itself (takes ~5 s; the lights keep their current effect meanwhile).
+MEMORY_GROWTH_LIMIT_MB = 300
 
 # SetThreadExecutionState flags for the tray's "Keep screen on"
 ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
@@ -1850,6 +1851,8 @@ async def main():
     mixer = audio_mixer.run_in_thread(log=print) if MIXER_ENABLED else None
     mixer_wanted = mixer is not None and mixer.running          # only watch it if it could start at all
     last_health_check = time.monotonic()
+    started_at = time.monotonic()
+    memory_baseline = None
 
     effects = EffectTable()
     companions = CompanionManager()
@@ -2075,8 +2078,11 @@ async def main():
                 except Exception:
                     private_mb = 0
 
-                if private_mb > MEMORY_LIMIT_MB:
-                    print(f"Health : memory {private_mb:.0f} MB > {MEMORY_LIMIT_MB} MB - restarting the controller")
+                if memory_baseline is None and time.monotonic() - started_at > 60:
+                    memory_baseline = private_mb
+
+                if memory_baseline and private_mb > memory_baseline + MEMORY_GROWTH_LIMIT_MB:
+                    print(f"Health : memory grew {memory_baseline:.0f} -> {private_mb:.0f} MB - restarting the controller")
 
                     if schedule_restart():
                         if tray is not None:
